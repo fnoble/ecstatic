@@ -1,0 +1,23 @@
+name:                ecstatic
+version:             0.1.0.0
+synopsis:            Static C Examiner
+description:         Static C Examiner
+homepage:            http://www.swift-nav.com
+license:             BSD2
+license-file:        LICENSE
+author:              Fergus Noble
+maintainer:          fergus@swift-nav.com
+copyright:           (c) Fergus Noble, 2014
+category:            Development
+build-type:          Simple
+cabal-version:       >=1.10
+
+executable ecstatic
+  main-is:             Main.hs
+  build-depends:       base >=4.7 && <4.8,
+                       language-c >=0.4.5 && <0.5,
+                       containers >=0.4.0 && <0.6,
+                       HaskellForMaths >=0.4.5 && <0.5,
+                       ansi-terminal,
+                       uniplate
+  default-language:    Haskell2010
