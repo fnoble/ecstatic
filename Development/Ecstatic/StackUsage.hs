@@ -3,6 +3,8 @@
 module Development.Ecstatic.StackUsage where
 
 import Development.Ecstatic.Utils
+import qualified Development.Ecstatic.Simplify as S
+
 
 import Language.C
 import Language.C.Pretty
@@ -15,6 +17,7 @@ import qualified Data.Map as M
 import System.Console.ANSI
 import Control.Monad
 import Text.Printf
+import qualified Text.PrettyPrint as PP
 import Debug.Trace
 
 num_dds :: Integer
@@ -39,14 +42,21 @@ doStackUsage :: GlobalDecls -> CStat -> IO ()
 doStackUsage g s = do
   setSGR [SetColor Foreground Dull Blue]
   putStrLn "Stack Usage:"
-  print $ pretty $ stackUsage g s
+  let su = stackUsage g s
+  --    s1 = PP.render . pretty . simplify $ su
+  --    s2 = PP.render . pretty . S.simplify $ su
+  print . pretty . S.simplify $ su
+  --appendFile "su1.txt" (s1 ++ "\n")
+  --appendFile "su2.txt" (s2 ++ "\n")
   setSGR [Reset]
 
 stackUsage :: GlobalDecls -> CStat -> CExpr
 stackUsage g s =
   -- Simple stack usage model:
   -- usage = size of automatic vars + stack usage of function calls
-  simplify $ applyAssumptions $ vars_size + func_call_size
+
+  --simplify $ applyAssumptions $ vars_size + func_call_size
+  applyAssumptions $ vars_size + func_call_size
 
   where
     -- Total size of all the local variables

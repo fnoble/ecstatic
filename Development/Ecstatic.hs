@@ -6,6 +6,8 @@ import Development.Ecstatic.Utils
 import Development.Ecstatic.BoundsCheck
 import Development.Ecstatic.StackUsage
 
+import qualified Development.Ecstatic.Simplify as S
+
 import Language.C
 import Language.C.Pretty
 import Language.C.System.GCC
@@ -21,6 +23,7 @@ import Data.Generics.Uniplate.Data
 import System.Console.ANSI
 import Data.Typeable
 import Data.Data
+import qualified Text.PrettyPrint as PP
 
 
 includes = [
@@ -65,6 +68,11 @@ analyseFunc g f@(FunDef d s i) = do
   --boundsCheck s
   doStackUsage g s
 
+-- PP the parsed AST
+reprint :: IO String
+reprint = do
+  ast <- parseFile "test2.c"
+  return $ PP.render . prettyUsingInclude $ ast
 
 main :: IO ()
 main = do

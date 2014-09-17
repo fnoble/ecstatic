@@ -17,7 +17,11 @@ void *__builtin___memcpy_chk(void *destination, const void * source, size_t num,
 { }
 void *__builtin___memset_chk(void *destination, int c, size_t num, size_t len)
 { }
-extern struct __double2 __sincospi_stret(double) {}
+void memcpy(void *destination, const void * source, size_t len)
+{ }
+void memset(void *destination, int c, size_t len)
+{ }
+
 
 double round(double x) { return 0; }
 double sqrt(double x) { return 0; }
