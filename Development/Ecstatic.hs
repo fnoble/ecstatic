@@ -5,6 +5,7 @@ module Main where
 import Development.Ecstatic.Utils
 import Development.Ecstatic.BoundsCheck
 import Development.Ecstatic.StackUsage
+import Development.Ecstatic.Annotate
 
 import qualified Development.Ecstatic.Simplify as S
 
@@ -24,27 +25,8 @@ import System.Console.ANSI
 import Data.Typeable
 import Data.Data
 import qualified Text.PrettyPrint as PP
+import System.Environment (getArgs)
 
-
-includes = [
-  "-I../../swiftnav/piksi_firmware/libswiftnav/include/libswiftnav",
-  "-I../../swiftnav/piksi_firmware/libswiftnav/src",
-  "-I../../swiftnav/piksi_firmware/libswiftnav/clapack-3.2.1-CMAKE/INCLUDE",
-  "-I../../swiftnav/piksi_firmware/libswiftnav/CBLAS/include" ]
-
-parseFile :: FilePath -> IO CTranslUnit
-parseFile input_file =
-  do parse_result <- parseCFile (newGCC "gcc") Nothing includes input_file
-     checkResult "[Parsing]" parse_result
-
-checkResult :: (Show a) => String -> (Either a b) -> IO b
-checkResult label = either (error . (label++) . show) return
-
-extractFuncs :: DeclEvent -> Trav [FunDef] ()
-extractFuncs (DeclEvent (FunctionDef f)) = do
-  modifyUserState (\x -> f:x)
-  return ()
-extractFuncs _ = return ()
 
 declHeader :: VarDecl -> String
 declHeader d =
@@ -66,7 +48,8 @@ analyseFunc g f@(FunDef d s i) = do
   --print $ pretty d
 
   --boundsCheck s
-  doStackUsage g s
+  _ <- doStackUsage' g s
+  return ()
 
 -- PP the parsed AST
 reprint :: IO String
@@ -74,14 +57,31 @@ reprint = do
   ast <- parseFile "test2.c"
   return $ PP.render . prettyUsingInclude $ ast
 
+testRepl name = do
+  ast <- parseFile "test.c"
+  case parseAST ast of
+    Left err -> putStrLn $ "bad ast: " ++ show err
+    Right (globals, fns) -> 
+      case findDef fns name of
+        Nothing -> print "no def"
+        Just def -> analyseFunc globals def
+
+analyzeFile :: FilePath -> IO ()
+analyzeFile file = do
+  -- ast <- parseFile "test.c"
+  ast <- parseFile file
+  --ast <- parseFile "../../SwiftNav/piksi_firmware/libswiftnav/src/amb_kf.c"
+  let Right (globals, funcs) = parseAST ast
+  --print $ pretty globals
+  mapM_ (analyseFunc globals) $ funcs
+
+testMain = analyzeFile "test2.c"
+
 main :: IO ()
 main = do
-  -- ast <- parseFile "test.c"
-  ast <- parseFile "test2.c"
-  --ast <- parseFile "../../SwiftNav/piksi_firmware/libswiftnav/src/amb_kf.c"
-  (globals, funcs) <- checkResult "[Analysis]" . runTrav [] $
-    withExtDeclHandler (analyseAST ast) extractFuncs
-  --print "GLOBALS:\n"
-  --print $ pretty globals
-  mapM_ (analyseFunc globals) $ userState funcs
+  args <- getArgs
+  case args of
+    [] -> return ()
+    file : _ -> analyzeFile file
+      
 

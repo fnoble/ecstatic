@@ -2,16 +2,54 @@
 {-# LANGUAGE FlexibleInstances #-}
 
 module Development.Ecstatic.Utils (
-  substitute, subByName, simplify
+  substitute, subByName, simplify,
+  sortWith,
+  parseFile, checkResult,
+  pp
 ) where
 
 import Language.C
 import Language.C.Data.Ident
+import Language.C.System.GCC
 import Data.Generics.Uniplate.Data
 import Data.Typeable
 import Data.Data
+import Data.List
 import Control.Monad
 import Debug.Trace
+
+includes = [
+  "-nostdinc",
+  "-I./mocks/",
+
+  "-I../../swift/piksi_firmware/libswiftnav/include/libswiftnav",
+  "-I../../swift/piksi_firmware/libswiftnav/include/",
+  "-I../../swift/piksi_firmware/libopencm3/include/",
+
+  "-I../../swift/piksi_firmware/ChibiOS-RT/os/kernel/include/",
+  "-I../../swift/piksi_firmware/ChibiOS-RT/os/ports/GCC/ARMCMx/",
+  "-I../../swift/piksi_firmware/ChibiOS-RT/os/ports/GCC/ARMCMx/STM32F4xx/",
+  "-I../../swift/piksi_firmware/ChibiOS-RT/os/ports/common/ARMCMx/",
+
+  "-I../../swift/piksi_firmware/libswiftnav/src",
+  "-I../../swift/piksi_firmware/libswiftnav/clapack-3.2.1-CMAKE/INCLUDE",
+  "-I../../swift/piksi_firmware/libswiftnav/CBLAS/include",
+  "-I../../swift/piksi_firmware/src"
+  ]
+
+
+pp :: CExpr -> String
+pp = show . pretty
+
+checkResult :: (Show a) => String -> (Either a b) -> IO b
+checkResult label = either (error . (label++) . show) return
+
+parseFile :: FilePath -> IO CTranslUnit
+parseFile input_file =
+  do parse_result <- parseCFile (newGCC "gcc") Nothing includes input_file
+     checkResult "[Parsing]" parse_result
+
+sortWith f = sortBy (\x y -> compare (f x) (f y))
 
 -- Substitute a variable for an expression throughout anything that contains
 -- expressions (e.g. AST, CExpression, CStatement)
