@@ -21,3 +21,4 @@ executable ecstatic
                        uniplate,
                        pretty
   default-language:    Haskell2010
+  ghc-options:         -Wall -fno-warn-orphans

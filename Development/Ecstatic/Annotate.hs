@@ -24,8 +24,6 @@ import qualified Text.PrettyPrint as PP
 type CFile = String
 type Line = Int
 
-un = undefined
-
 annotate :: CFile -> [FunDef] -> (FunDef -> Maybe String) -> CFile
 annotate file fs op =
   let as = sortWith fst $ mapMaybe annotation fs
@@ -44,7 +42,8 @@ annotate file fs op =
         Nothing -> [line]
         Just str -> [str, line]
 
-runAnnotate :: FilePath -> FilePath -> (GlobalDecls -> FunDef -> Maybe String) -> IO ()
+runAnnotate :: FilePath -> FilePath -> (GlobalDecls -> FunDef -> Maybe String)
+            -> IO ()
 runAnnotate input output op =
   if input == output then
     putStrLn "Need distinct output file" else do
@@ -65,18 +64,6 @@ nameNode (FunDef (VarDecl (VarName (Ident name' _ _) _) attrs tp) stmt node) =
   Just (name', node)
 nameNode _ = Nothing
 
-
---findDef :: CTranslUnit -> String -> Either [CError] [NodeInfo]
---findDef ast name = do
---  fs <- getFunctions ast
---  return (mapMaybe f fs)
--- where
---  f def = do
---    (name', node) <- nameNode def
---    if name' == name then
---      return node else
---      Nothing
-
 findDef :: [FunDef] -> String -> Maybe FunDef
 findDef fns name =
   find match fns 
@@ -85,28 +72,6 @@ findDef fns name =
     case nameNode def of
       Nothing -> False
       Just (name', _) -> name' == name
-
-funcNames :: CTranslUnit -> [String]
-funcNames ast =
-  let Right fs = getFunctions ast
-  in
-    map fst $ mapMaybe nameNode fs
-
-extractFuncs :: DeclEvent -> Trav [FunDef] ()
-extractFuncs (DeclEvent (FunctionDef f)) = do
-  modifyUserState (\x -> f:x)
-  return ()
-extractFuncs _ = return ()
-
-getFunctions ast = do
-  (_, fs) <- parseAST ast
-  return fs
-
-parseAST :: CTranslUnit -> Either [CError] (GlobalDecls, [FunDef])
-parseAST ast = do
-  (globals, funcs) <- runTrav [] $ withExtDeclHandler (analyseAST ast) extractFuncs
-  return $ (globals, userState funcs)
-
 
 stackAnn :: FilePath -> GlobalDecls -> FunDef -> Maybe String
 stackAnn fname globals (FunDef (VarDecl (VarName (Ident name _ _) _) attrs tp) s info) =
@@ -118,6 +83,6 @@ stackAnn fname globals (FunDef (VarDecl (VarName (Ident name _ _) _) attrs tp) s
      else
        Nothing
 
-doStackAnnotation = do
-  let fname = "test2.c"
+doStackAnnotation :: FilePath -> IO ()
+doStackAnnotation fname =
   runAnnotate fname (fname ++ ".out.c") (stackAnn fname)

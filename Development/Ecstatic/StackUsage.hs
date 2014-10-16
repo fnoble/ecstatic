@@ -1,8 +1,6 @@
 -- TODO
 --
--- struct sizes
--- follow type defs
---  - pass globals to sizeof
+-- FILL IN TypeName sizes
 --
 -- C stdlib
 --
@@ -10,15 +8,11 @@
 --
 -- merge globals from list of files?
 --
--- clean up ' fns
---
 -- UI:
 --  config file?
 --  REPL interface / DOT
 --
--- TODO BUGS
---
--- simplify conditionals
+-- simplify conditional CExpr's
 
 {-# LANGUAGE ScopedTypeVariables #-}
 
@@ -28,18 +22,12 @@ import Development.Ecstatic.Utils
 import qualified Development.Ecstatic.Simplify as S
 
 import Language.C
-import Language.C.Pretty
 import Language.C.Data.Ident
 import Language.C.Analysis
 import Data.Generics.Uniplate.Data
-import Data.Typeable
-import Data.Data
 import qualified Data.Map as M
 import System.Console.ANSI
-import Control.Monad
-import Text.Printf
 import qualified Text.PrettyPrint as PP
-import Debug.Trace
 
 num_dds :: Integer
 num_dds = 10
@@ -56,30 +44,33 @@ assumptions = [("num_dds", num_dds),
                ("new_state_dim", num_dds),
                ("lwork", 22)]
 
-applyAssumptions :: [Assumption] -> CExpr -> CExpr
-applyAssumptions assumptions e = foldr sub e assumptions
+applyAssumptions :: Expr -> CExpr
+applyAssumptions e = foldr sub e assumptions
   where sub :: (String, Integer) -> CExpr -> CExpr
         sub (s, x) expr = subByName s ((fromInteger x)::CExpr) expr
+
+
+data CallGraph = CG { localStack :: CExpr
+                    , totalStack :: CExpr
+                    , children   :: [(String, CallGraph)] }
+  deriving (Show)
 
 doStackUsage :: GlobalDecls -> CStat -> IO CExpr
 doStackUsage g s = do
   setSGR [SetColor Foreground Dull Blue]
   putStrLn "Stack Usage:"
   let su = stackUsage g s
-  --    s1 = PP.render . pretty . simplify $ su
-      su_string = PP.render . pretty . S.simplify $ su
-  print . pretty $ su
-  --appendFile "su1.txt" (s1 ++ "\n")
-  writeFile "amb_su.txt" (su_string ++ "\n")
+      su_string = PP.render . pretty $ su
+  putStrLn su_string
   setSGR [Reset]
 
   return su
 
-doStackUsage' :: GlobalDecls -> CStat -> IO CallGraph
-doStackUsage' g s = do
-  let su = stackUsage' g s
-  putStrLn $ ppCallGraph "" su
-  return su
+printCallGraph :: GlobalDecls -> CStat -> IO CallGraph
+printCallGraph g s = do
+  let cg = callGraph g s
+  putStrLn $ ppCallGraph "" cg
+  return cg
 
 ppCallGraph :: String -> CallGraph -> String
 ppCallGraph prefix (CG ls ts calls) =
@@ -95,158 +86,144 @@ ppCallGraph prefix (CG ls ts calls) =
     prefix ++ (ppName name) ++ ":\n" ++ ppCallGraph ((replicate 4 ' ') ++ prefix) call
           
 
+stackUsage :: GlobalDecls -> CStat -> CExpr
+stackUsage g = totalStack . callGraph g
 
-data CallGraph = CG { localStack :: CExpr
-                    , totalStack :: CExpr
-                    , children :: [(String, CallGraph)] }
-  deriving (Show)
-
-stackUsage' :: GlobalDecls -> CStat -> CallGraph
-stackUsage' g s =
-  -- Simple stack usage model:
-  -- usage = size of automatic vars + stack usage of function calls
-
-  --S.simplify $ applyAssumptions assumptions $ vars_size + func_call_size
-  CG (S.simplify vars_size) (stackUsage g s) func_calls
+callGraph :: GlobalDecls -> CStat -> CallGraph
+callGraph g s =
+  -- TODO don't recompute stack usage at every node
+  -- (memoize)
+  CG vars_size total_stack func_calls
 
   where
+    total_stack = S.simplify $
+      vars_size + sum (map (totalStack . snd) func_calls)
     -- Total size of all the local variables
     --
-    vars_size = sum [sizeOfDecl d | d :: CDecl <- universeBi s]
+    vars_size = S.simplify $ sum [sizeOfDecl g d | d :: CDecl <- universeBi s]
 
     -- Total of function calls
     func_calls = [f func args | CCall func args _ :: CExpr <- universeBi s]
 
     f :: CExpr -> [CExpr] -> (String, CallGraph)
-    f c@(CVar id@(Ident name _ _) _) args =
-      case funcStackUsage' g id args of
+    f c@(CVar ident@(Ident name _ _) _) args =
+      case funcStackUsage g ident args of
         Nothing -> (name, CG c c [])
           --error $ "Call to unknown function: " ++ (show $ pretty id)
         Just e -> (name, e)
     f _ _ = error "Call to non-constant function?"
 
-mapSnd f (a, b) = (a, f b)
-
 subInCallGraph :: Ident -> CExpr -> CallGraph -> CallGraph
-subInCallGraph id e (CG e1 t1 cs) =
-  CG (substitute id e e1) 
-     (substitute id e t1) 
-     $ map (mapSnd (subInCallGraph id e)) cs
+subInCallGraph ident e (CG e1 t1 cs) =
+  CG (substitute ident e e1) 
+     (substitute ident e t1) 
+     $ map (mapSnd (subInCallGraph ident e)) cs
 
-funcStackUsage' :: GlobalDecls -> Ident -> [CExpr] -> Maybe CallGraph
-funcStackUsage' g i args = M.lookup i (gObjs g) >>= f
+funcStackUsage :: GlobalDecls -> Ident -> [CExpr] -> Maybe CallGraph
+funcStackUsage g i args = M.lookup i (gObjs g) >>= f
   where f :: IdentDecl -> Maybe CallGraph
         f (FunctionDef (FunDef
             (VarDecl _ _ (FunctionType (FunType _ params _) _))
             s _)) =
-          Just $ foldr sub (stackUsage' g s) subs
+          Just $ foldr sub (callGraph g s) subs
             where
-              ids = [id | (ParamDecl (VarDecl (VarName id _) _ _) _) <- params]
+              ids = [ident | (ParamDecl (VarDecl (VarName ident _) _ _) _) <- params]
               subs = zip ids args
-              sub (id, arg) stmt = subInCallGraph id arg stmt
+              sub (ident, arg) stmt = subInCallGraph ident arg stmt
         -- Not a function definition!?
         f _ = Nothing
 
-stackUsage :: GlobalDecls -> CStat -> CExpr
-stackUsage g s =
-  -- Simple stack usage model:
-  -- usage = size of automatic vars + stack usage of function calls
-
-  --S.simplify $ applyAssumptions assumptions $ vars_size + func_call_size
-  S.simplify $ vars_size + func_call_size
-
-  where
-    -- Total size of all the local variables
-    --
-    vars_size = sum [sizeOfDecl d | d :: CDecl <- universeBi s]
-
-    -- Total of function calls
-    func_call_size = sum [f func args | CCall func args _ :: CExpr <- universeBi s]
-
-    f :: CExpr -> [CExpr] -> CExpr
-    f c@(CVar id _) args =
-      case funcStackUsage g id args of
-        Nothing -> c
-          --error $ "Call to unknown function: " ++ (show $ pretty id)
-        Just e -> e
-    f _ _ = error "Call to non-constant function?"
-
-funcStackUsage :: GlobalDecls -> Ident -> [CExpr] -> Maybe CExpr
-funcStackUsage g i args = M.lookup i (gObjs g) >>= f
-  where f :: IdentDecl -> Maybe CExpr
-        f (FunctionDef (FunDef
-            (VarDecl _ _ (FunctionType (FunType _ params _) _))
-            s _)) =
-          Just $ foldr sub (stackUsage g s) subs
-            where
-              ids = [id | (ParamDecl (VarDecl (VarName id _) _ _) _) <- params]
-              subs = zip ids args
-              sub (id, arg) stmt = substitute id arg stmt
-        -- Not a function definition!?
-        f _ = Nothing
-
-sizeOfDecl :: CDecl -> CExpr
+sizeOfDecl :: GlobalDecls -> CDecl -> CExpr
 -- Empty list corresponds to type used outside a declaration?
 -- e.g. sizeof(double)
-sizeOfDecl (CDecl _ [] _) = 0
-sizeOfDecl (CDecl ds ((d,i,e):vs) n1) =
+sizeOfDecl _ (CDecl _ [] _) = 0
+sizeOfDecl g (CDecl ds ((d,_,_):vs) n1) =
   f [ts | CTypeSpec ts <- ds] * maybe (fromInteger 1) modifier d
-    + sizeOfDecl (CDecl ds vs n1)
+    + sizeOfDecl g (CDecl ds vs n1)
   where f :: [CTypeSpec] -> CExpr
-        f [ts] = fromInteger $ sizeOf ts
+        f [ts] = sizeOf g ts
         -- "Implicit int rule", should never occur in C99
-        f []   = fromInteger $ sizeOf (CIntType undefined)
+        f []   = sizeOf g (CIntType undefined)
         f _    = error "Declaration with more than one type specifier?"
 
         modifier (CDeclr _ [] _ _ _) = (fromInteger 1)
-        modifier (CDeclr id (dd:dds) sl a n2) =
-          modifier' dd * modifier (CDeclr id dds sl a n2)
+        modifier (CDeclr ident (dd:dds) sl a n2) =
+          modifier' dd * modifier (CDeclr ident dds sl a n2)
 
         modifier' (CArrDeclr _ (CNoArrSize _) _) = error "Unknown array size"
         modifier' (CArrDeclr _ (CArrSize _ sz) _) = sz
         modifier' _ = fromInteger 1
 
 -- TODO: Check these for our platform!!
-sizeOf :: CTypeSpecifier a -> Integer
-sizeOf (CVoidType _) = 0
-sizeOf (CCharType _) = 1
-sizeOf (CShortType _) = 2
-sizeOf (CIntType _) = 4
-sizeOf (CLongType _) = 8
-sizeOf (CFloatType _) = 4
-sizeOf (CDoubleType _) = 8
-sizeOf (CSignedType _) = 4
-sizeOf (CUnsigType _) = 4
-sizeOf (CBoolType _) = 1
-sizeOf (CComplexType _) = 16
-sizeOf (CEnumType _ _) = 4
-sizeOf (CTypeOfExpr _ _) = error "Unsupported type: typeof()"
-sizeOf (CTypeOfType _ _) = error "Unsupported type: typeof()"
-{-
-sizeOf (CSUType (CStruct CStructTag _ decl _ _) _) =
-  case decl of
-    Nothing -> 0
-    Just ds -> sum $ map sizeOfDecl ds
-sizeOf (CSUType (CStruct CUnionTag _ decl _ _) _) =
-  case decl of
-    Nothing -> 0
-    Just ds -> maximum $ map sizeOfDecl ds
--}
+sizeOf :: GlobalDecls -> CTypeSpecifier NodeInfo -> CExpr
+sizeOf _ (CVoidType _) = 0
+sizeOf _ (CCharType _) = 1
+sizeOf _ (CShortType _) = 2
+sizeOf _ (CIntType _) = 4
+sizeOf _ (CLongType _) = 8
+sizeOf _ (CFloatType _) = 4
+sizeOf _ (CDoubleType _) = 8
+sizeOf _ (CSignedType _) = 4
+sizeOf _ (CUnsigType _) = 4
+sizeOf _ (CBoolType _) = 1
+sizeOf _ (CComplexType _) = 16
+sizeOf _ (CEnumType _ _) = 4
+sizeOf _ (CTypeOfExpr _ _) = error "Unsupported type: typeof()"
+sizeOf _ (CTypeOfType _ _) = error "Unsupported type: typeof()"
 
--- TODO: Should really find all the typedefs and calculate the size based on
--- the mapped type, for now just match known common typedefs.
--- HINT - we can pull the typedefs out of GlobalDecls
-sizeOf (CTypeDef (Ident "u64" _ _) _) = 8
-sizeOf (CTypeDef (Ident "s64" _ _) _) = 8
-sizeOf (CTypeDef (Ident "u32" _ _) _) = 4
-sizeOf (CTypeDef (Ident "s32" _ _) _) = 4
-sizeOf (CTypeDef (Ident "u16" _ _) _) = 2
-sizeOf (CTypeDef (Ident "s16" _ _) _) = 2
-sizeOf (CTypeDef (Ident "u8" _ _) _) = 1
-sizeOf (CTypeDef (Ident "s8" _ _) _) = 1
-sizeOf (CTypeDef (Ident "integer" _ _) _) = 4
-sizeOf (CTypeDef (Ident "systime_t" _ _) _) = 4
+-- TODO does not take into account packing of fields
+sizeOf g (CSUType (CStruct CStructTag _ decl _ _) _) =
+  case decl of
+    Nothing -> 0
+    Just ds -> 
+      let s = sum $ map (sizeOfDecl g) ds
+      in s
+-- TODO add a call to MAX here
+-- (need c function rather than maximum since return type is CExpr)
+sizeOf _ ty@(CSUType (CStruct CUnionTag _ decl _ _) _) =
+  error $ "unsupported type: " ++ show ty
+--  case decl of
+--    Nothing -> 0
+--    Just ds -> maximum $ map sizeOfDecl ds
+
+sizeOf g (CTypeDef ident _) = 
+  case M.lookup ident (gTypeDefs g) of
+    Nothing -> error $ "unknown typedef ident: " ++ show ident
+    Just (TypeDef _ ty _ _) ->
+      sizeOfType g ty
+
+sizeOfType :: GlobalDecls -> Type -> CExpr
+sizeOfType g t@(TypeDefType (TypeDefRef _ mtype _) _ _) =
+  case mtype of
+    Nothing -> error $ "unknown TypeRef: " ++ show t
+    Just ty -> sizeOfType g ty
+sizeOfType g (DirectType ty _ _) =
+  sizeOfTypeName g ty
+-- TODO PtrType ArrayType FunctionType
+sizeOfType _ ty = error $ "unsupported type: " ++ show ty
+
+-- TODO replace the big sizeof enumeration with a call to this?
+sizeOfTypeName :: GlobalDecls -> TypeName -> CExpr
+sizeOfTypeName g t@(TyComp (CompTypeRef ref _ _)) =
+  case M.lookup ref (gTags g) of
+    Nothing -> error $ "unknown TypeName: " ++ show t
+    Just (CompDef (CompType _ _ decls _ _)) ->
+      sum $ map (sizeOfMemberDecl g) decls
+    -- TODO add value for this case
+    Just (EnumDef{}) -> error "union types unsupported"
+sizeOfTypeName _ (TyIntegral ty) =
+  case ty of
+    TyBool -> 1
+    TyInt -> 4
+    -- TODO TyChar TySChar TyUChar TyShort
+sizeOfTypeName _ (TyFloating ty) =
+  case ty of
+    TyFloat -> 4
+    TyDouble -> 8
+    TyLDouble -> 16 -- TODO ??
 -- TODO
-sizeOf (CTypeDef _ _) = 22
-sizeOf (CTypeDef (Ident s _ _) _) = error $ "Unknown typedef: " ++ s
+sizeOfTypeName _ ty = error $ "unsupported type: " ++ show ty
 
+sizeOfMemberDecl :: GlobalDecls -> MemberDecl -> CExpr
+sizeOfMemberDecl _ (AnonBitField{}) = 0 -- TODO
+sizeOfMemberDecl g (MemberDecl (VarDecl _ _ ty) _ _) = sizeOfType g ty

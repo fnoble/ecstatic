@@ -22,6 +22,8 @@ data CProd = CProd [CTerm] [Name] Integer
 
 type MulAcc = ([CTerm], M.Map Name Integer, Integer)
 type SumAcc = ([CProd],  M.Map Prod Integer)
+
+accEmpty :: SumAcc
 accEmpty = ([], M.empty)
 
 -- Simplify Multiplication
@@ -58,13 +60,13 @@ csadd acc t =
   let accs = csmul [([], M.empty, 1)] t
       ps   = map toProd accs
       f :: SumAcc -> CProd -> SumAcc
-      f (cts, acc) prod@(CProd ts' names n) =
+      f (cts, acc') prod =
         case prod of
           -- Simple product of variables
           CProd [] names n ->
-            (cts, M.insertWith (+) (Prod names) n acc)
+            (cts, M.insertWith (+) (Prod names) n acc')
           _ ->
-            (prod : cts, acc)
+            (prod : cts, acc')
   in  
     foldl f acc ps
 
@@ -74,9 +76,13 @@ nodeinfo :: NodeInfo
 nodeinfo = undefined
 
 -- Print CExpressions
+ct :: CTerm -> CTerm -> CTerm
 ct x y  = CBinary CMulOp x y nodeinfo -- Nodeinfo
+cp :: CTerm -> CTerm -> CTerm
 cp x y  = CBinary CAddOp x y nodeinfo
+ci :: Integer -> CTerm
 ci n    = CConst (CIntConst (CInteger n DecRepr noFlags) nodeinfo) 
+cv :: String -> CTerm
 cv name = CVar (Ident name 0 nodeinfo) nodeinfo
 
 prodToExpr :: Prod -> Integer -> CTerm
