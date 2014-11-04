@@ -15,7 +15,11 @@ cabal-version:       >=1.10
 executable ecstatic
   main-is:             Development/Ecstatic.hs
   build-depends:       base >=4.6 && <4.8,
+                       mtl,
                        language-c >=0.4.5 && <0.5,
+
+                       --LibClang,
+
                        containers >=0.4.0 && <0.6,
                        ansi-terminal,
                        uniplate,

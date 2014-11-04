@@ -1,0 +1,124 @@
+-- TODO
+-- various TypeName sizes
+-- struct packing
+-- unions
+-- local static declarations
+module Development.Ecstatic.Size where
+import Development.Ecstatic.Utils
+import qualified Development.Ecstatic.Simplify as S
+
+import Language.C
+import Language.C.Data.Ident
+import Language.C.Analysis
+import Data.Generics.Uniplate.Data
+import qualified Data.Map as M
+import System.Console.ANSI
+import qualified Text.PrettyPrint as PP
+import Control.Monad.State
+import Control.Applicative((<$>))
+
+sizeOfDecl :: GlobalDecls -> CDecl -> CExpr
+-- Empty list corresponds to type used outside a declaration?
+-- e.g. sizeof(double)
+sizeOfDecl _ (CDecl _ [] _) = 0
+sizeOfDecl g (CDecl ds ((d,_,_):vs) n1) =
+  f [ts | CTypeSpec ts <- ds] * maybe (fromInteger 1) modifier d
+    + sizeOfDecl g (CDecl ds vs n1)
+  where f :: [CTypeSpec] -> CExpr
+        f [ts] = sizeOf g ts
+        -- "Implicit int rule", should never occur in C99
+        f []   = sizeOf g (CIntType undefined)
+        f [t1, t2] = sizeOf g t2 -- TODO does this handle "unsigned [foo]"?
+        f ts = error $ "Declaration with too many type specifiers?: " ++ show ts
+
+        modifier (CDeclr _ [] _ _ _) = (fromInteger 1)
+        modifier (CDeclr ident (dd:dds) sl a n2) =
+          modifier' dd * modifier (CDeclr ident dds sl a n2)
+
+        modifier' (CArrDeclr _ (CNoArrSize _) _) = error $ "Unknown array size" ++ show n1
+        modifier' (CArrDeclr _ (CArrSize _ sz) _) = sz
+        modifier' _ = fromInteger 1
+
+-- TODO: Check these for our platform!!
+sizeOf :: GlobalDecls -> CTypeSpecifier NodeInfo -> CExpr
+sizeOf _ (CVoidType _) = 0
+sizeOf _ (CCharType _) = 1
+sizeOf _ (CShortType _) = 2
+sizeOf _ (CIntType _) = 4
+sizeOf _ (CLongType _) = 8
+sizeOf _ (CFloatType _) = 4
+sizeOf _ (CDoubleType _) = 8
+sizeOf _ (CSignedType _) = 4
+sizeOf _ (CUnsigType _) = 4
+sizeOf _ (CBoolType _) = 1
+sizeOf _ (CComplexType _) = 16
+sizeOf _ (CEnumType _ _) = 4
+sizeOf _ (CTypeOfExpr _ _) = error "sizeOf. Unsupported type: CTypeOfExpr"
+sizeOf _ (CTypeOfType _ _) = error "sizeOf. Unsupported type: CTypeOfType"
+
+-- TODO does not take into account packing of fields
+sizeOf g (CSUType (CStruct CStructTag _ decl _ _) _) =
+  case decl of
+    Nothing -> 0
+    Just ds -> 
+      let s = sum $ map (sizeOfDecl g) ds
+      in s
+-- TODO add a call to MAX here
+-- (need c function rather than maximum since return type is CExpr)
+sizeOf g ty@(CSUType (CStruct CUnionTag _ decl _ _) _) =
+  case decl of 
+    Just (x : _) ->
+      sizeOfDecl g x -- TODO FIX
+    Just [] -> 0
+    _ -> error $ "sizeOf. CSUType. ???: " ++ show ty
+--  case decl of
+--    Nothing -> 0
+--    Just ds -> maximum $ map sizeOfDecl ds
+
+sizeOf g (CTypeDef ident _) = 
+  case M.lookup ident (gTypeDefs g) of
+    Nothing -> error $ "unknown typedef ident: " ++ show ident
+    Just (TypeDef _ ty _ _) ->
+      sizeOfType g ty
+
+sizeOfType :: GlobalDecls -> Type -> CExpr
+sizeOfType g t@(TypeDefType (TypeDefRef _ mtype _) _ _) =
+  case mtype of
+    Nothing -> error $ "unknown TypeRef: " ++ show t
+    Just ty -> sizeOfType g ty
+sizeOfType g (DirectType ty _ _) =
+  sizeOfTypeName g ty
+-- TODO FunctionType
+sizeOfType g (PtrType _ _ _) = ptrSize
+ where
+   ptrSize = 4
+sizeOfType g (ArrayType ty (ArraySize _ expr) _ attrs) = sizeOfType g ty * expr
+-- Assume unknown length array is "flexible member array" of struct
+sizeOfType g (ArrayType ty (UnknownArraySize _) _ attrs) = sizeOfType g ty
+sizeOfType _ ty = error $ "sizeOfType. unsupported type: " ++ show ty
+
+-- TODO replace the big sizeof enumeration with a call to this?
+sizeOfTypeName :: GlobalDecls -> TypeName -> CExpr
+sizeOfTypeName g t@(TyComp (CompTypeRef ref _ _)) =
+  case M.lookup ref (gTags g) of
+    Nothing -> error $ "unknown TypeName: " ++ show t
+    Just (CompDef (CompType _ _ decls _ _)) ->
+      sum $ map (sizeOfMemberDecl g) decls
+    -- TODO add value for this case
+    Just (EnumDef{}) -> error "union types unsupported"
+sizeOfTypeName _ (TyIntegral ty) =
+  case ty of
+    TyBool -> 1
+    TyInt -> 4
+    -- TODO TyChar TySChar TyUChar TyShort
+sizeOfTypeName _ (TyFloating ty) =
+  case ty of
+    TyFloat -> 4
+    TyDouble -> 8
+    TyLDouble -> 16 -- TODO ??
+-- TODO
+sizeOfTypeName _ ty = error $ "sizeOfTypeName. unsupported type: " ++ show ty
+
+sizeOfMemberDecl :: GlobalDecls -> MemberDecl -> CExpr
+sizeOfMemberDecl _ (AnonBitField{}) = 0 -- TODO
+sizeOfMemberDecl g (MemberDecl (VarDecl _ _ ty) _ _) = sizeOfType g ty

@@ -5,13 +5,16 @@
 module Development.Ecstatic.Utils (
   substitute, subByName, --simplify,
   mapFst, mapSnd, sortWith,
-  parseFile, checkResult, parseAST, parseASTFile
+  parseFile, checkResult, parseAST,
+  parseASTFile, parseASTFiles,
+  preprocessFile
 ) where
 
 import Language.C
 import Language.C.Data.Ident
 import Language.C.System.GCC
 import Language.C.Analysis
+import Language.C.System.Preprocess (rawCppArgs, runPreprocessor)
 import Data.Generics.Uniplate.Data
 import Data.Typeable
 import Data.Data
@@ -20,21 +23,23 @@ import Data.List
 includes :: [FilePath]
 includes = [
   "-nostdinc",
- -- "-I./mocks/",
+  "-I./mocks/",
 
-  "-I../../swift/piksi_firmware/libswiftnav/include/libswiftnav",
-  "-I../../swift/piksi_firmware/libswiftnav/include/",
-  "-I../../swift/piksi_firmware/libopencm3/include/",
+  "-I../../swiftnav/piksi_firmware/libswiftnav/include/libswiftnav",
+  "-I../../swiftnav/piksi_firmware/libswiftnav/include/",
+  "-I../../swiftnav/piksi_firmware/libopencm3/include/",
 
-  "-I../../swift/piksi_firmware/ChibiOS-RT/os/kernel/include/",
-  "-I../../swift/piksi_firmware/ChibiOS-RT/os/ports/GCC/ARMCMx/",
-  "-I../../swift/piksi_firmware/ChibiOS-RT/os/ports/GCC/ARMCMx/STM32F4xx/",
-  "-I../../swift/piksi_firmware/ChibiOS-RT/os/ports/common/ARMCMx/",
+  "-I../../swiftnav/piksi_firmware/ChibiOS-RT/os/kernel/include/",
+  "-I../../swiftnav/piksi_firmware/ChibiOS-RT/os/ports/GCC/ARMCMx/",
+  "-I../../swiftnav/piksi_firmware/ChibiOS-RT/os/ports/GCC/ARMCMx/STM32F4xx/",
+  "-I../../swiftnav/piksi_firmware/ChibiOS-RT/os/ports/common/ARMCMx/",
 
-  "-I../../swift/piksi_firmware/libswiftnav/src",
-  "-I../../swift/piksi_firmware/libswiftnav/clapack-3.2.1-CMAKE/INCLUDE",
-  "-I../../swift/piksi_firmware/libswiftnav/CBLAS/include",
-  "-I../../swift/piksi_firmware/src"
+  "-I../../swiftnav/piksi_firmware/libswiftnav/src",
+  "-I../../swiftnav/piksi_firmware/libswiftnav/clapack-3.2.1-CMAKE/INCLUDE",
+  "-I../../swiftnav/piksi_firmware/libswiftnav/CBLAS/include",
+  "-I../../swiftnav/piksi_firmware/src",
+  
+  "-mno-sse3"
   ]
 
 
@@ -67,6 +72,7 @@ subByName n e = transformBi f
         f v@(CVar (Ident s _ _) _) = if n == s then e else v
         f x = x
 
+
 -- Used by StackUsage
 dummyNodeInfo :: NodeInfo
 dummyNodeInfo = OnlyPos nopos (nopos, 0)
@@ -90,6 +96,14 @@ parseFile input_file =
   do parse_result <- parseCFile (newGCC "gcc") Nothing includes input_file
      checkResult "[Parsing]" parse_result
 
+preprocessFile :: FilePath -> IO String
+preprocessFile file = do
+  out <- runPreprocessor (newGCC "gcc") (rawCppArgs includes file)
+  case out of
+    Left code -> return $ show code
+    Right stream -> return $ inputStreamToString stream
+
+
 extractFuncs :: DeclEvent -> Trav [FunDef] ()
 extractFuncs (DeclEvent (FunctionDef f)) = do
   modifyUserState (\x -> f:x)
@@ -101,6 +115,7 @@ parseAST ast = do
   (globals, funcs) <- runTrav [] $ withExtDeclHandler (analyseAST ast) extractFuncs
   return $ (globals, userState funcs)
 
+-- TODO delete
 parseASTFile :: FilePath -> IO (Maybe (GlobalDecls, [FunDef]))
 parseASTFile file = do
   ast <- parseFile file
@@ -108,6 +123,22 @@ parseASTFile file = do
     Left err -> do putStrLn $ "bad ast: " ++ show err
                    return Nothing
     Right (globals, fns) -> return (Just (globals, fns))
+
+parseASTFiles :: [FilePath] -> IO (Maybe (GlobalDecls, [FunDef]))
+parseASTFiles [] = do
+  putStrLn "parseFiles requires at least one file"
+  return Nothing
+parseASTFiles files = do
+  asts <- mapM parseFile files
+  case mapM parseAST asts of
+    Left err -> do putStrLn $ "bad ast: " ++ show err
+                   return Nothing
+    Right pairs ->
+      let (globals, fns) = unzip pairs
+      in
+        return $ Just (foldr1 mergeGlobalDecls globals, concat fns)
+
+
 
 -- TODO only used for error reporting/debugging; remove?
 deriving instance Show EnumTypeRef

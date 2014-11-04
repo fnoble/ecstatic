@@ -1,8 +1,9 @@
 #define STM32F4
 #include "common.h"
-#include <linear_algebra.c>
-#include "amb_kf.c"
-#include "init.c"
-#include "dgnss_management.c"
-#include "ambiguity_test.c"
+//#include "test3.c"
+//#include <linear_algebra.c>
+//#include "amb_kf.c"
+//#include "init.c"
+//#include "dgnss_management.c"
+//#include "sbp_piksi.c"
 #include "solution.c"

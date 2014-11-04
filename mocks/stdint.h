@@ -1,5 +1,5 @@
-#ifndef STUPID_MOCKS
-#define STUPID_MOCKS
+#ifndef STUPID_MOCKS_STDINT
+#define STUPID_MOCKS_STDINT
 
 typedef int int8_t;
 typedef int int16_t;
@@ -10,7 +10,6 @@ typedef int uint16_t;
 typedef int uint32_t;
 typedef int uint64_t;
 
-typedef int size_t;
 typedef int time_t;
 
 typedef int bool;
