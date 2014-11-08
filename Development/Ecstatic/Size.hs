@@ -1,8 +1,10 @@
 -- TODO
 -- various TypeName sizes
 -- struct packing
--- unions
+-- union typedefs
 -- local static declarations
+--
+-- replace show with pretty
 module Development.Ecstatic.Size where
 import Development.Ecstatic.Utils
 import qualified Development.Ecstatic.Simplify as S
@@ -11,17 +13,18 @@ import Language.C
 import Language.C.Data.Ident
 import Language.C.Analysis
 import Data.Generics.Uniplate.Data
-import qualified Data.Map as M
+import qualified Data.Map.Strict as M
 import System.Console.ANSI
 import qualified Text.PrettyPrint as PP
 import Control.Monad.State
 import Control.Applicative((<$>))
+import Debug.Trace (trace)
 
 sizeOfDecl :: GlobalDecls -> CDecl -> CExpr
 -- Empty list corresponds to type used outside a declaration?
 -- e.g. sizeof(double)
 sizeOfDecl _ (CDecl _ [] _) = 0
-sizeOfDecl g (CDecl ds ((d,_,_):vs) n1) =
+sizeOfDecl g (CDecl ds ((d,initializer,expr):vs) n1) =
   f [ts | CTypeSpec ts <- ds] * maybe (fromInteger 1) modifier d
     + sizeOfDecl g (CDecl ds vs n1)
   where f :: [CTypeSpec] -> CExpr
@@ -35,7 +38,11 @@ sizeOfDecl g (CDecl ds ((d,_,_):vs) n1) =
         modifier (CDeclr ident (dd:dds) sl a n2) =
           modifier' dd * modifier (CDeclr ident dds sl a n2)
 
-        modifier' (CArrDeclr _ (CNoArrSize _) _) = error $ "Unknown array size" ++ show n1
+        modifier' (CArrDeclr _ (CNoArrSize _) _) = 
+          case initializer of
+            Just (CInitList es _) -> fromIntegral $ length es
+            Just (CInitExpr (CConst (CStrConst str _)) _) -> fromIntegral $ length $ getCString str
+            _ -> error $ "Unknown array size at: " ++ show n1 ++ "\n" ++ show initializer ++ ":::" ++ show expr ++ "\n"
         modifier' (CArrDeclr _ (CArrSize _ sz) _) = sz
         modifier' _ = fromInteger 1
 
@@ -64,7 +71,6 @@ sizeOf g (CSUType (CStruct CStructTag _ decl _ _) _) =
       let s = sum $ map (sizeOfDecl g) ds
       in s
 -- TODO add a call to MAX here
--- (need c function rather than maximum since return type is CExpr)
 sizeOf g ty@(CSUType (CStruct CUnionTag _ decl _ _) _) =
   case decl of 
     Just (x : _) ->
@@ -110,13 +116,21 @@ sizeOfTypeName _ (TyIntegral ty) =
   case ty of
     TyBool -> 1
     TyInt -> 4
-    -- TODO TyChar TySChar TyUChar TyShort
+    TyChar -> 1
+    TySChar -> 1 -- TODO ?
+    TyUChar -> 1
+    TyShort -> 2 -- TODO ?
+    _ -> error $ "sizeOfTypeName. unknown integral type: " ++ show ty
 sizeOfTypeName _ (TyFloating ty) =
   case ty of
     TyFloat -> 4
     TyDouble -> 8
     TyLDouble -> 16 -- TODO ??
--- TODO
+-- TODO currently returns 0
+sizeOfTypeName g t@(TyEnum (EnumTypeRef ref _)) =
+  case M.lookup ref (gTags g) of
+    Nothing -> error $ "unknown TypeName: " ++ show t
+    Just x -> trace ("sizeOfTypeName. TODO: " ++ show (pretty x)) $ 0
 sizeOfTypeName _ ty = error $ "sizeOfTypeName. unsupported type: " ++ show ty
 
 sizeOfMemberDecl :: GlobalDecls -> MemberDecl -> CExpr

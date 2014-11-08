@@ -47,4 +47,6 @@ extern FILE *__stderrp;
 #define	stdout	__stdoutp
 #define	stderr	__stderrp
 
+char * strchr ( const char *, int );
+
 #endif /* _STDIO_H_ */
