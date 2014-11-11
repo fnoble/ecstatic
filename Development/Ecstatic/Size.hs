@@ -4,10 +4,10 @@
 -- union typedefs
 -- local static declarations
 --
--- replace show with pretty
+-- eventually: replace show with pretty
 module Development.Ecstatic.Size where
 import Development.Ecstatic.Utils
-import qualified Development.Ecstatic.Simplify as S
+import qualified Development.Ecstatic.SimplifyDef as S
 
 import Language.C
 import Language.C.Data.Ident

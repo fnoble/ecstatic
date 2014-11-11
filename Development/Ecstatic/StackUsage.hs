@@ -1,9 +1,11 @@
 -- TODO
 -- function pointers
+--
 -- use linker maps
 --
 -- max over calls instead of sum
 --
+-- external functions: printf, ch*, blas
 -- UI:
 --  config file?
 --  REPL interface / DOT
@@ -15,7 +17,7 @@ module Development.Ecstatic.StackUsage where
 
 import Development.Ecstatic.Utils
 import Development.Ecstatic.Size
-import qualified Development.Ecstatic.Simplify as S
+import qualified Development.Ecstatic.SimplifyDef as S
 
 import Language.C
 import Language.C.Analysis
@@ -56,9 +58,6 @@ applyAssumptions e = foldr sub e assumptions
   where sub :: (String, Integer) -> CExpr -> CExpr
         sub (s, x) expr = subByName s ((fromInteger x)::CExpr) expr
 
-addStackVal :: String -> CallGraph -> State StackMap ()
-addStackVal name cg = modify (M.insert name cg)
-
 defStackUsage :: GlobalDecls -> (CStat, [ParamDecl]) -> State StackMap CallGraph
 defStackUsage g (s, params) = do
   fs <- sequence func_calls
@@ -66,7 +65,7 @@ defStackUsage g (s, params) = do
         local_size + sum (map (totalStack . snd) fs)
   return $ CG local_size total_stack fs
   where
-    local_size = vars_size + arg_size
+    local_size = S.simplify $ vars_size + arg_size
     -- Total size of all the local variables
     vars_size = S.simplify $ sum [sizeOfDecl g d | d :: CDecl <- universeBi s]
     -- Total of function calls (monadic)
@@ -85,6 +84,8 @@ callStackUsage g expr@(CVar ident _) args = do
   return (name, cg)
  where
   name = identToString ident
+  addStackVal :: String -> CallGraph -> State StackMap ()
+  addStackVal name cg = modify (M.insert name cg)
   doCG = do
     stackm <- get
     mval <- gets (M.lookup name)

@@ -16,10 +16,14 @@ executable ecstatic
   main-is:             Development/Ecstatic.hs
   build-depends:       base >=4.6 && <4.8,
                        mtl,
+                       -- NOTE: using a locally forked version for now.
+                       -- need to derive Eq,Ord for NodeInfo
                        language-c >=0.4.5 && <0.5,
                        containers >=0.4.0 && <0.6,
                        ansi-terminal,
                        uniplate,
-                       pretty
+                       pretty,
+                       -- Local package
+                       simplify
   default-language:    Haskell2010
   ghc-options:         -Wall -fno-warn-orphans

@@ -141,30 +141,30 @@ parseASTFiles files = do
 
 
 -- TODO only used for error reporting/debugging; remove?
---deriving instance Show EnumTypeRef
---deriving instance Show CompTypeRef
---deriving instance Show VarName
---deriving instance Show BuiltinType
---deriving instance Show DeclAttrs
---deriving instance Show TypeQuals
---deriving instance Show TypeName
---deriving instance Show VarDecl
---deriving instance Show ParamDecl
---deriving instance Show TypeDefRef
---deriving instance Show FunType
---deriving instance Show ArraySize
---deriving instance Show Type
---deriving instance Show Attr
---deriving instance Show TypeDef
---
---deriving instance Show ObjDef
---deriving instance Show EnumType
---deriving instance Show FunDef
---deriving instance Show Enumerator
---deriving instance Show Decl
---deriving instance Show IdentDecl
---
---deriving instance Show MemberDecl
---deriving instance Show CompType
---deriving instance Show TagDef
+deriving instance Show EnumTypeRef
+deriving instance Show CompTypeRef
+deriving instance Show VarName
+deriving instance Show BuiltinType
+deriving instance Show DeclAttrs
+deriving instance Show TypeQuals
+deriving instance Show TypeName
+deriving instance Show VarDecl
+deriving instance Show ParamDecl
+deriving instance Show TypeDefRef
+deriving instance Show FunType
+deriving instance Show ArraySize
+deriving instance Show Type
+deriving instance Show Attr
+deriving instance Show TypeDef
+
+deriving instance Show ObjDef
+deriving instance Show EnumType
+deriving instance Show FunDef
+deriving instance Show Enumerator
+deriving instance Show Decl
+deriving instance Show IdentDecl
+
+deriving instance Show MemberDecl
+deriving instance Show CompType
+deriving instance Show TagDef
 
