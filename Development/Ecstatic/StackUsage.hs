@@ -1,38 +1,43 @@
+-- TODO now
+-- - parse/input stack limit
+-- - if function exceeds, print bad stack traces
+--
+--
 -- TODO
--- function pointers
+-- figure out if track.c ambiguity matters
+-- generate warnings
+--   - for external functions, _max, local vars, function pointers
+-- substitute function pointers
+-- substitute local vars
 --
--- use linker maps
---
--- max over calls instead of sum
+-- make a linker?
 --
 -- external functions: printf, ch*, blas
 -- UI:
 --  config file?
---  REPL interface / DOT
---
--- simplify conditional CExpr's
+--  REPL interface / DOT?
 {-# LANGUAGE ScopedTypeVariables #-}
-
+{-# LANGUAGE DeriveDataTypeable #-}
 module Development.Ecstatic.StackUsage where
-
+import Development.Ecstatic.Types
 import Development.Ecstatic.Utils
 import Development.Ecstatic.Size
 import qualified Development.Ecstatic.SimplifyDef as S
+import Development.Ecstatic.SimplifyDef
 
 import Language.C
 import Language.C.Analysis
+import Language.C.Data.Ident
+
 import Data.Generics.Uniplate.Data
+import Data.Typeable
+import Data.Data
 import qualified Data.Map as M
 import Data.Maybe
+import Data.List (nub)
 import System.Console.ANSI
 import Control.Monad.State
 import Debug.Trace (trace)
-
-data CallGraph = CG
-  { localStack :: CExpr
-  , totalStack :: CExpr
-  , children   :: [(String, CallGraph)] }
-  deriving (Show)
 
 type StackMap = M.Map String CallGraph
 
@@ -53,17 +58,42 @@ assumptions = [("num_dds", num_dds),
                ("new_state_dim", num_dds),
                ("lwork", 22)]
 
-applyAssumptions :: Expr -> CExpr
+cgMap f (CG l t cs) = CG (f l) (f t) (map (mapSnd (cgMap f)) cs)
+
+--cgSimplify = transformBi S.simplify
+cgSimplify = cgMap S.simplify
+conjSimpl f = S.simplify . f . S.simplify
+
+fullSimplExpr :: CExpr -> CExpr
+fullSimplExpr = conjSimpl reduceConditionals . conjSimpl (transformBi (subAllNames 0))
+
+reduceCG :: CallGraph -> CallGraph
+reduceCG cg =
+  cgMap fullSimplExpr $
+    foldr sub cg assumptions
+  where
+    sub (s, x) = subByName s ((fromInteger x)::CExpr)
+
+applyAssumptions :: CExpr -> CExpr
 applyAssumptions e = foldr sub e assumptions
   where sub :: (String, Integer) -> CExpr -> CExpr
         sub (s, x) expr = subByName s ((fromInteger x)::CExpr) expr
 
+makeMax :: CExpr -> CExpr -> CExpr
+makeMax e1 e2 = CCond (CBinary CGrOp e1 e2 undefNode) (Just e1) e2 undefNode
+makeMaximum :: [CExpr] -> CExpr
+makeMaximum es = CCall (CVar (Ident "_max" (-1) undefNode) undefNode) es undefNode
+
 defStackUsage :: GlobalDecls -> (CStat, [ParamDecl]) -> State StackMap CallGraph
 defStackUsage g (s, params) = do
   fs <- sequence func_calls
-  let total_stack = S.simplify $
-        local_size + sum (map (totalStack . snd) fs)
-  return $ CG local_size total_stack fs
+  let total_stack =
+        local_size +
+        --(sum $
+        (makeMaximum $ 
+        --(foldr makeMax 0 $
+          (map (totalStack . snd) fs))
+  return $ reduceCG $ CG local_size total_stack fs
   where
     local_size = S.simplify $ vars_size + arg_size
     -- Total size of all the local variables
@@ -77,7 +107,6 @@ funParams :: VarDecl -> Maybe [ParamDecl]
 funParams (VarDecl _ _ (FunctionType (FunType _ params _) _)) = Just params
 funParams _ = Nothing
 
--- TODO remove trace calls
 callStackUsage :: GlobalDecls -> CExpr -> [CExpr] -> State StackMap (String, CallGraph)
 callStackUsage g expr@(CVar ident _) args = do
   cg <- doCG
@@ -106,6 +135,8 @@ callStackUsage g expr@(CVar ident _) args = do
           -- Only have a declaration
           Just (Declaration (Decl (VarDecl (VarName ident' _) _ _) _)) -> 
             returnVar -- TODO link somehow?
+          -- Shouldn't happen:
+          Just x -> error $ "callStackUsage. : " ++ show x
           -- Unknown function, return abstract size
           Nothing -> returnVar
   returnVar = do
@@ -129,10 +160,13 @@ ppCallGraph :: CallGraph -> String
 ppCallGraph = ppCallGraph' ""
 ppCallGraph' :: String -> CallGraph -> String
 ppCallGraph' prefix (CG ls ts calls) =
-  init . unlines $ [prefix ++ "Local: " ++ (show $ pretty ls),
-                    prefix ++ "Total: " ++ (show $ pretty ts)]
+  init . unlines $ [prefix ++ "Local: " ++ (ppStack ls),
+                    prefix ++ "Total: " ++ (ppStack ts)]
           -- ++ map ppBinding calls
  where
+  ppStack = show . pretty
+  --ppStack s | Just n <- isPrim s = show n
+  --ppStack _ = "[symbol]"
   ppName name =
     setSGRCode [SetColor Foreground Dull Blue] ++
     name ++ setSGRCode [Reset]

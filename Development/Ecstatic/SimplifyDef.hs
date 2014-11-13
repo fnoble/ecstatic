@@ -2,45 +2,42 @@
 {-# LANGUAGE TypeSynonymInstances #-}
 {-# LANGUAGE FlexibleInstances #-}
 module Development.Ecstatic.SimplifyDef (
-  simplify
+  simplify,
+  isSum, isMul, isAtom, isPrim
 ) where
-
+import Development.Ecstatic.Types
 import qualified Simplify as S
 import Language.C
 import Language.C.Analysis
 import qualified Data.Map.Strict as M
+import Debug.Trace (trace)
 
-simplify' :: CExpr -> S.Poly CExpr Int
-simplify' = S.simplify expr
+-- Exported function
+simplify :: CExpr -> CExpr
+simplify = simplify'
+simplify' :: CExpr -> CExpr
+simplify' = rebuild . (S.simplify expr_def)
 
+-- CExpr builder
 rebuild :: S.Poly CExpr Int -> CExpr
 rebuild poly =
   case map toProd (M.toList poly) of
-    [] -> intToExpr 0
-    ps -> foldl1 (cp) ps
+    [] -> fromIntegral 0
+    ps -> foldl1 (+) ps
  where
   toProd :: ([(CExpr, Int)], Int) -> CExpr
   toProd (ts, coef) =
-    let coef' = intToExpr coef
+    let coef' = fromIntegral coef
     in
     case ts of
       [] -> coef'
-      _ -> foldl1 (ct) $
-        ((if coef == (S.one expr) then [] else [coef']) ++
+      _ -> foldl1 (*) $
+        ((if coef == (S.one expr_def) then [] else [coef']) ++
           concatMap (\(n, exp) -> replicate exp n) ts)
 
-ct :: CExpr -> CExpr -> CExpr
-ct x y  = CBinary CMulOp x y undefNode -- Nodeinfo
-cp :: CExpr -> CExpr -> CExpr
-cp x y  = CBinary CAddOp x y undefNode
-
-intToExpr :: Int -> CExpr
-intToExpr n = CConst (CIntConst (CInteger (fromIntegral n) DecRepr noFlags) undefNode) 
-
-simplify :: CExpr -> CExpr
-simplify = rebuild . simplify'
-expr :: S.Expr CExpr CExpr Int
-expr = S.Expr
+-- module Simplify definitions
+expr_def :: S.Expr CExpr CExpr Int
+expr_def = S.Expr
   { S.isSum = isSum
   , S.isMul = isMul
   , S.isAtom = isAtom
@@ -48,17 +45,21 @@ expr = S.Expr
   , S.zero = 0
   , S.one = 1
   }
- where
-  isSum (CBinary CAddOp t1 t2 _) = Just [t1, t2]
-  isSum _ = Nothing
-  isMul (CBinary CMulOp t1 t2 _) = Just [t1, t2]
-  isMul _ = Nothing
-  isAtom (CBinary CMulOp t1 t2 _) = Nothing
-  isAtom (CBinary CAddOp t1 t2 _) = Nothing
-  isAtom (CConst (CIntConst (CInteger number _ _) _)) = Nothing
-  isAtom t = Just t
-  isPrim (CConst (CIntConst (CInteger number _ _) _)) = Just (fromIntegral number)
-  isPrim _ = Nothing
+isSum (CBinary CAddOp t1 t2 _) = Just [t1, t2]
+isSum (CBinary CSubOp t1 t2 _) =
+  Just [t1, CUnary CMinOp t2 undefNode]
+isSum _ = Nothing
+isMul (CBinary CMulOp t1 t2 _) = Just [t1, t2]
+isMul _ = Nothing
+isAtom (CBinary CMulOp t1 t2 _) = Nothing
+isAtom (CBinary CAddOp t1 t2 _) = Nothing
+isAtom (CConst (CIntConst (CInteger number _ _) _)) = Nothing
+isAtom t = Just t
+isPrim' (CConst (CIntConst (CInteger number _ _) _)) = Just (fromIntegral number)
+isPrim' _ = Nothing
+isPrim x | Just n <- isPrim' x = Just n
+isPrim (CUnary CMinOp x _) | Just n <- isPrim' x = Just (-n)
+isPrim _ = Nothing
 
 deriving instance Ord CExpr
 deriving instance Eq CExpr

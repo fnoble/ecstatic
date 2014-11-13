@@ -1,15 +1,18 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE StandaloneDeriving #-}
-
-module Development.Ecstatic.Utils (
-  substitute, subByName, --simplify,
-  mapFst, mapSnd, sortWith,
-  parseFile, checkResult, parseAST,
-  parseASTFile, parseASTFiles,
-  preprocessFile
-) where
-
+module Development.Ecstatic.Utils
+--(
+--  substitute, subByName, subAllNames,
+--  mapFst, mapSnd, sortWith,
+--  parseFile, checkResult, parseAST,
+--  parseASTFile, parseASTFiles,
+--  preprocessFile,
+--  cgIdents
+--)
+where
+import Development.Ecstatic.Types
+import Development.Ecstatic.SimplifyDef
 import Language.C
 import Language.C.Data.Ident
 import Language.C.System.GCC
@@ -19,6 +22,7 @@ import Data.Generics.Uniplate.Data
 import Data.Typeable
 import Data.Data
 import Data.List
+import Debug.Trace (trace)
 
 includes :: [FilePath]
 includes = [
@@ -65,27 +69,54 @@ substitute i e = transformBi f
 
 -- Substitute any variable matching a given name for an expression throughout
 -- anything that contains expressions (e.g. AST, CExpression, CStatement)
-subByName :: forall a b . (Data a, Typeable a, Data b, Typeable b) =>
-                String -> CExpression b -> a -> a
+subByName :: forall a b . (Data a, Typeable a, Data b, Typeable b)
+          => String -> CExpression b -> a -> a
 subByName n e = transformBi f
   where f :: CExpression b -> CExpression b
         f v@(CVar (Ident s _ _) _) = if n == s then e else v
         f x = x
 
+-- TODO remove this!!
+-- it will cause bugs
+subAllNames :: CExpr -> CExpr -> CExpr
+subAllNames e = transformBi f
+  where
+   f :: CExpr -> CExpr
+   f x | Just _ <- isCond x = x
+   f x@(CBinary _ _ _ _) = x
+   f x | Just _ <- isMaxCall x = x
+   f x@(CVar (Ident "_max" _ _) _) = x
+   f x | Just _ <- isAtom x = e -- trace ("\nsee: " ++ show x++"\n") $ e
+   f x = x
 
--- Used by StackUsage
-dummyNodeInfo :: NodeInfo
-dummyNodeInfo = OnlyPos nopos (nopos, 0)
-instance Num (CExpression NodeInfo) where
-  e1 + e2 = CBinary CAddOp e1 e2 dummyNodeInfo
-  e1 - e2 = CBinary CSubOp e1 e2 dummyNodeInfo
-  e1 * e2 = CBinary CMulOp e1 e2 dummyNodeInfo
-  negate e = CUnary CMinOp e dummyNodeInfo
-  fromInteger x = CConst (CIntConst (CInteger x DecRepr noFlags) dummyNodeInfo)
-  abs = undefined
-  signum = undefined
-  -- abs
-  -- signum
+isMaxCall (CCall (CVar (Ident "_max" _ _) _) args _) = Just args
+isMaxCall _ = Nothing
+isCond (CCond (CBinary CGrOp l r _) (Just t) e _) = Just (l,r,t,e)
+isCond _ = Nothing
+
+-- Reduces 'MAX' instances
+reduceCond :: CExpr -> CExpr
+reduceCond expr
+  | Just args <- isMaxCall expr
+  , Just vals <- mapM isPrim args
+  = maximum (0:vals)
+reduceCond expr
+  | Just (l,r,t,e) <- isCond expr
+  , Just lval <- isPrim l
+  , Just rval <- isPrim r =
+      if lval > rval
+      then t
+      else e
+reduceCond e = e
+
+reduceConditionals :: CExpr -> CExpr
+reduceConditionals = transformBi reduceCond
+
+-- List identifiers in term
+getIdentifiers :: CExpr -> [(String, NodeInfo)]
+getIdentifiers expr = [(name, node) | i@(Ident name _ node) <- universeBi expr]
+--cgIdents :: CallGraph -> [Ident]
+cgIdents = getIdentifiers . totalStack
 
 -- Parsing Stuff --
 checkResult :: (Show a) => String -> (Either a b) -> IO b
@@ -102,7 +133,6 @@ preprocessFile file = do
   case out of
     Left code -> return $ show code
     Right stream -> return $ inputStreamToString stream
-
 
 extractFuncs :: DeclEvent -> Trav [FunDef] ()
 extractFuncs (DeclEvent (FunctionDef f)) = do
@@ -138,8 +168,6 @@ parseASTFiles files = do
       in
         return $ Just (foldr1 mergeGlobalDecls globals, concat fns)
 
-
-
 -- TODO only used for error reporting/debugging; remove?
 deriving instance Show EnumTypeRef
 deriving instance Show CompTypeRef
@@ -156,14 +184,12 @@ deriving instance Show ArraySize
 deriving instance Show Type
 deriving instance Show Attr
 deriving instance Show TypeDef
-
 deriving instance Show ObjDef
 deriving instance Show EnumType
 deriving instance Show FunDef
 deriving instance Show Enumerator
 deriving instance Show Decl
 deriving instance Show IdentDecl
-
 deriving instance Show MemberDecl
 deriving instance Show CompType
 deriving instance Show TagDef
