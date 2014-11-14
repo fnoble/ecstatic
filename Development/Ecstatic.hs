@@ -1,5 +1,5 @@
---TODO
--- Proper command line flag parsing
+-- TODO
+-- Read from config file rather than flag
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections #-}
 
@@ -19,6 +19,7 @@ import System.Environment (getArgs)
 import Control.Monad.State
 import Control.Applicative((<$>))
 import Data.Either (partitionEithers)
+import System.Console.GetOpt
 
 declHeader :: VarDecl -> String
 declHeader d =
@@ -39,11 +40,10 @@ ppDeclCG (d, cg1) = do
   putStrLn $ str1
   setSGR [Reset]
 
--- PP the parsed AST
-reprint :: IO String
-reprint = do
-  ast <- parseFile "test2.c"
-  return $ PP.render . prettyUsingInclude $ ast
+-- Pretty print a parsed AST
+reprintAST :: CTranslUnit -> String
+reprintAST ast = do
+  PP.render . prettyUsingInclude $ ast
 
 declString :: VarDecl -> String
 declString = identToString . declIdent
@@ -52,10 +52,10 @@ filterCallGraphFn :: VarDecl -> Bool
 filterCallGraphFn =
   (`elem` (map fst A.stack_limits)) . declString
 
--- TODO NOW overflow return code
-analyzeFiles :: [FilePath] -> IO (Maybe (String, [(VarDecl, CallGraph)]))
-analyzeFiles files = do
-  mast <- parseASTFiles files
+-- TODO overflow return code?
+analyzeFiles :: FilePath -> [FilePath] -> IO (Maybe (String, [(VarDecl, CallGraph)]))
+analyzeFiles base files = do
+  mast <- parseASTFiles base files
   case mast of
     Nothing -> putStrLn "analyzeFile: Invalid file." >> return Nothing
     Just (globals, funcs) -> do
@@ -74,18 +74,19 @@ analyzeFiles files = do
 
       let traces = map (uncurry maxTraces) limitPairs
           (bad, good) = partitionEithers traces
-
-      let nsString = "num_sats: " ++ show (A.num_dds+1) ++ "\n"
       lines <- mapM (ppTraceLimit False) good
-      let outputString = unlines $ nsString : lines
 
-      case bad of
-        [] -> return ()
-        _  -> do 
-          putStrLn "analyzeFiles. error: symbolic values in "
-          print bad
+      -- Output string
+      let 
+        nsString = "num_sats: " ++ show (A.num_dds+1) ++ "\n"
+        errors = case bad of
+                   [] -> ""
+                   _  -> 
+                     "analyzeFiles. error: symbolic values in\n"
+                     ++ show bad
+        overflows = if any isOverflow good then "OVERFLOW DETECTED" else ""
+        outputString = unlines $ overflows : errors : nsString : lines
 
-      putStrLn $ "num functions: " ++ show (length funcs)
       return $ Just (outputString, pairs)
   where
    go :: GlobalDecls -> FunDef -> State StackMap (VarDecl, CallGraph)
@@ -99,54 +100,80 @@ analyzeFiles files = do
          traceString = ppTrace trace
      if put
        then do
-       setSGR [SetColor Foreground Dull Blue]
-       putStrLn limitString
-       setSGR [Reset]
-       putStrLn $ traceString
+         setSGR [SetColor Foreground Dull Blue]
+         putStrLn limitString
+         setSGR [Reset]
+         putStrLn $ traceString
        else return ()
      return $ unlines [limitString, traceString]
 
-
-data FlagVal = NoFlag | Flag -- | FlagVal a
-parseFlag :: [String] -> String -> (FlagVal, [String])
-parseFlag args flag =
-  let (front, back) = span (/= flag) args
-  in
-  case back of
-    [] -> (NoFlag, front)
-    _ : rest -> (Flag, front ++ rest)
-
--- For ghci
-testMain :: IO ()
-testMain = do
-  doMain NoFlag ["test.c"]
-  return ()
-
-printParse :: FilePath -> IO ()
-printParse file = do
-  mast <- parseASTFiles [file]
+printParse :: FilePath -> FilePath -> IO ()
+printParse base file = do
+  mast <- parseASTFiles base [file]
   case mast of
     Nothing -> putStrLn "analyzeFile: Invalid file."
     Just (_, funcs) -> do
       mapM_ print funcs
 
-doMain :: FlagVal -> [FilePath] -> IO (Maybe (String, [(VarDecl, CallGraph)]))
-doMain flag files = do
-  case flag of
-    Flag -> do
-      pps <- mapM preprocessFile files
-      writeFile "pp-output.c" (concat pps)
-      return Nothing
-    NoFlag ->
-      analyzeFiles files
+doParse base output files = do
+  pps <- mapM (preprocessFile base) files
+  writeFile output (concat pps)
+  return Nothing
 
--- FLAGS:
---  -E: outputs total preprocessor output to file
-main :: IO ()
+doSimpleMode files = error "doSimpleMode. not implemented."
+
+doMain :: FilePath -> FilePath -> [FilePath] -> IO (Maybe (String, [(VarDecl, CallGraph)]))
+doMain base output files = do
+  mpair <- analyzeFiles base files
+  case mpair of
+    Just (str, _) -> writeFile output str
+    Nothing -> return ()
+  return mpair
+
+data Options = Options
+  { optBaseDir :: FilePath
+  , optOutputFile :: FilePath
+  , optOnlyParse :: Bool
+  , optSimpleMode :: Bool
+  }
+defaultOptions = Options
+  { optBaseDir = "./piksi_firmware"
+  , optOutputFile = "ecstatic-output"
+  , optOnlyParse = False
+  , optSimpleMode = False
+  }
+type FlagMod = Options -> Options
+mainOptions :: [OptDescr FlagMod]
+mainOptions =
+  [ Option "E" ["preprocess"]
+     (NoArg $ \o -> o { optOnlyParse = True })
+     "Write preprocessor output and stop."
+--  , Option "s" ["simple"]
+--     (NoArg $ \o -> o { optSimpleMode = True })
+--     "Analyze all functions in a single file."
+  , Option "o" ["output"]
+     (ReqArg (\s o -> o { optOutputFile = s }) "FILE")
+     "Output file."
+  , Option "b" ["src"]
+     (ReqArg (\s o -> o { optBaseDir = s }) "DIR")
+     "Location of piksi_firmware source."
+  ]
+
 main = do
   args <- getArgs
-  let (flag, files) = parseFlag args "-E"
-  mpair <- doMain flag files
-  case mpair of
-    Just (str, _) -> writeFile "ecstatic-output" str
-    Nothing -> return ()
+  case getOpt Permute mainOptions args of
+    (flags, files, []) ->
+      let options = foldr ($) defaultOptions flags
+          base = (optBaseDir options)
+          output = (optOutputFile options)
+      in
+      if optOnlyParse options
+        then do
+          doParse base output files
+        else if optSimpleMode options
+             then doSimpleMode files
+             else doMain base output files
+
+    (_, _, errs) -> ioError $ userError $ concat errs ++ usageInfo optHeader mainOptions
+ where
+   optHeader = "Usage: "

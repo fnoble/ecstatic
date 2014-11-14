@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE NamedFieldPuns #-}
 module Development.Ecstatic.CallGraph where
 import Development.Ecstatic.Assumptions
 import Development.Ecstatic.Utils
@@ -96,6 +97,9 @@ maxTraces maxStack (name, (CG local total calls))
   justSnd (a, Just b) = Just (a, b)
   justSnd _ = Nothing
 maxTraces _ pair = Left pair
+
+isOverflow :: Trace -> Bool
+isOverflow Trace { trTotal, trLimit } = trTotal > trLimit
 
 ppTrace :: Trace -> String
 ppTrace = ppTrace' ""

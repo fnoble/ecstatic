@@ -2,14 +2,6 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE StandaloneDeriving #-}
 module Development.Ecstatic.Utils
---(
---  substitute, subByName, subAllNames,
---  mapFst, mapSnd, sortWith,
---  parseFile, checkResult, parseAST,
---  parseASTFile, parseASTFiles,
---  preprocessFile,
---  cgIdents
---)
 where
 import Development.Ecstatic.SimplifyDef
 import Language.C
@@ -22,24 +14,24 @@ import Data.Typeable
 import Data.Data
 import Data.List
 
-includes :: [FilePath]
-includes = [
+includeFlags :: FilePath -> [FilePath]
+includeFlags base = [
   "-nostdinc",
   "-I./mocks/",
 
-  "-I../../swiftnav/piksi_firmware/libswiftnav/include/libswiftnav",
-  "-I../../swiftnav/piksi_firmware/libswiftnav/include/",
-  "-I../../swiftnav/piksi_firmware/libopencm3/include/",
+  "-I" ++ base ++ "/libswiftnav/include/libswiftnav",
+  "-I" ++ base ++ "/libswiftnav/include/",
+  "-I" ++ base ++ "/libopencm3/include/",
 
-  "-I../../swiftnav/piksi_firmware/ChibiOS-RT/os/kernel/include/",
-  "-I../../swiftnav/piksi_firmware/ChibiOS-RT/os/ports/GCC/ARMCMx/",
-  "-I../../swiftnav/piksi_firmware/ChibiOS-RT/os/ports/GCC/ARMCMx/STM32F4xx/",
-  "-I../../swiftnav/piksi_firmware/ChibiOS-RT/os/ports/common/ARMCMx/",
+  "-I" ++ base ++ "/ChibiOS-RT/os/kernel/include/",
+  "-I" ++ base ++ "/ChibiOS-RT/os/ports/GCC/ARMCMx/",
+  "-I" ++ base ++ "/ChibiOS-RT/os/ports/GCC/ARMCMx/STM32F4xx/",
+  "-I" ++ base ++ "/ChibiOS-RT/os/ports/common/ARMCMx/",
 
-  "-I../../swiftnav/piksi_firmware/libswiftnav/src",
-  "-I../../swiftnav/piksi_firmware/libswiftnav/clapack-3.2.1-CMAKE/INCLUDE",
-  "-I../../swiftnav/piksi_firmware/libswiftnav/CBLAS/include",
-  "-I../../swiftnav/piksi_firmware/src",
+  "-I" ++ base ++ "/libswiftnav/src",
+  "-I" ++ base ++ "/libswiftnav/clapack-3.2.1-CMAKE/INCLUDE",
+  "-I" ++ base ++ "/libswiftnav/CBLAS/include",
+  "-I" ++ base ++ "/src",
   
   "-mno-sse3"
   ]
@@ -119,14 +111,14 @@ getIdentifiers expr = [(name, node) | (Ident name _ node) <- universeBi expr]
 checkResult :: (Show a) => String -> (Either a b) -> IO b
 checkResult label = either (error . (label++) . show) return
 
-parseFile :: FilePath -> IO CTranslUnit
-parseFile input_file =
-  do parse_result <- parseCFile (newGCC "gcc") Nothing includes input_file
+parseFile :: FilePath -> FilePath -> IO CTranslUnit
+parseFile base input_file =
+  do parse_result <- parseCFile (newGCC "gcc") Nothing (includeFlags base) input_file
      checkResult "[Parsing]" parse_result
 
-preprocessFile :: FilePath -> IO String
-preprocessFile file = do
-  out <- runPreprocessor (newGCC "gcc") (rawCppArgs includes file)
+preprocessFile :: FilePath -> FilePath -> IO String
+preprocessFile base file = do
+  out <- runPreprocessor (newGCC "gcc") (rawCppArgs (includeFlags base) file)
   case out of
     Left code -> return $ show code
     Right stream -> return $ inputStreamToString stream
@@ -142,21 +134,12 @@ parseAST ast = do
   (globals, funcs) <- runTrav [] $ withExtDeclHandler (analyseAST ast) extractFuncs
   return $ (globals, userState funcs)
 
--- TODO delete
-parseASTFile :: FilePath -> IO (Maybe (GlobalDecls, [FunDef]))
-parseASTFile file = do
-  ast <- parseFile file
-  case parseAST ast of
-    Left err -> do putStrLn $ "bad ast: " ++ show err
-                   return Nothing
-    Right (globals, fns) -> return (Just (globals, fns))
-
-parseASTFiles :: [FilePath] -> IO (Maybe (GlobalDecls, [FunDef]))
-parseASTFiles [] = do
+parseASTFiles :: FilePath -> [FilePath] -> IO (Maybe (GlobalDecls, [FunDef]))
+parseASTFiles _ [] = do
   putStrLn "parseFiles requires at least one file"
   return Nothing
-parseASTFiles files = do
-  asts <- mapM parseFile files
+parseASTFiles base files = do
+  asts <- mapM (parseFile base) files
   case mapM parseAST asts of
     Left err -> do putStrLn $ "bad ast: " ++ show err
                    return Nothing
