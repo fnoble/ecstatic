@@ -53,7 +53,7 @@ filterCallGraphFn =
   (`elem` (map fst A.stack_limits)) . declString
 
 -- TODO NOW overflow return code
-analyzeFiles :: [FilePath] -> IO (Maybe [(VarDecl, CallGraph)])
+analyzeFiles :: [FilePath] -> IO (Maybe (String, [(VarDecl, CallGraph)]))
 analyzeFiles files = do
   mast <- parseASTFiles files
   case mast of
@@ -75,7 +75,9 @@ analyzeFiles files = do
       let traces = map (uncurry maxTraces) limitPairs
           (bad, good) = partitionEithers traces
 
-      mapM_ ppTraceLimit good
+      let nsString = "num_sats: " ++ show (A.num_dds+1) ++ "\n"
+      lines <- mapM (ppTraceLimit False) good
+      let outputString = unlines $ nsString : lines
 
       case bad of
         [] -> return ()
@@ -84,20 +86,26 @@ analyzeFiles files = do
           print bad
 
       putStrLn $ "num functions: " ++ show (length funcs)
-      return $ Just pairs
+      return $ Just (outputString, pairs)
   where
    go :: GlobalDecls -> FunDef -> State StackMap (VarDecl, CallGraph)
    go g (FunDef d s _) | Just params <- funParams d =
      (d,) <$> defStackUsage g (s, params)
    go _ f = error $ "analyzeFiles. not a FunDef?: " ++ show f
 
-   ppTraceLimit :: Trace -> IO ()
-   ppTraceLimit trace = do
-     setSGR [SetColor Foreground Dull Blue]
+   ppTraceLimit :: Bool -> Trace -> IO String
+   ppTraceLimit put trace = do
      let limitString = "(limit " ++ show (trLimit trace) ++ ")"
-     putStrLn limitString
-     setSGR [Reset]
-     putStrLn $ ppTrace trace
+         traceString = ppTrace trace
+     if put
+       then do
+       setSGR [SetColor Foreground Dull Blue]
+       putStrLn limitString
+       setSGR [Reset]
+       putStrLn $ traceString
+       else return ()
+     return $ unlines [limitString, traceString]
+
 
 data FlagVal = NoFlag | Flag -- | FlagVal a
 parseFlag :: [String] -> String -> (FlagVal, [String])
@@ -109,9 +117,10 @@ parseFlag args flag =
     _ : rest -> (Flag, front ++ rest)
 
 -- For ghci
-testMain :: IO (Maybe [(VarDecl, CallGraph)])
+testMain :: IO ()
 testMain = do
   doMain NoFlag ["test.c"]
+  return ()
 
 printParse :: FilePath -> IO ()
 printParse file = do
@@ -121,7 +130,7 @@ printParse file = do
     Just (_, funcs) -> do
       mapM_ print funcs
 
-doMain :: FlagVal -> [FilePath] -> IO (Maybe [(VarDecl, CallGraph)])
+doMain :: FlagVal -> [FilePath] -> IO (Maybe (String, [(VarDecl, CallGraph)]))
 doMain flag files = do
   case flag of
     Flag -> do
@@ -133,8 +142,11 @@ doMain flag files = do
 
 -- FLAGS:
 --  -E: outputs total preprocessor output to file
-main :: IO (Maybe [(VarDecl, CallGraph)])
+main :: IO ()
 main = do
   args <- getArgs
   let (flag, files) = parseFlag args "-E"
-  doMain flag files
+  mpair <- doMain flag files
+  case mpair of
+    Just (str, _) -> writeFile "ecstatic-output" str
+    Nothing -> return ()

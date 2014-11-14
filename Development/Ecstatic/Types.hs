@@ -2,8 +2,6 @@
 {-# LANGUAGE FlexibleInstances #-}
 module Development.Ecstatic.Types where
 import Language.C
-import Data.Typeable
-import Data.Data
 
 instance Num (CExpression NodeInfo) where
   e1 + e2 = CBinary CAddOp e1 e2 undefNode
