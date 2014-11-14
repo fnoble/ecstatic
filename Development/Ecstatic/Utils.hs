@@ -11,7 +11,6 @@ module Development.Ecstatic.Utils
 --  cgIdents
 --)
 where
-import Development.Ecstatic.Types
 import Development.Ecstatic.SimplifyDef
 import Language.C
 import Language.C.Data.Ident
@@ -22,7 +21,6 @@ import Data.Generics.Uniplate.Data
 import Data.Typeable
 import Data.Data
 import Data.List
-import Debug.Trace (trace)
 
 includes :: [FilePath]
 includes = [
@@ -46,7 +44,6 @@ includes = [
   "-mno-sse3"
   ]
 
-
 -- General Stuff
 mapFst :: (a -> b) -> (a, c) -> (b, c)
 mapFst f (a, b) = (f a, b)
@@ -56,7 +53,7 @@ mapSnd f (a, b) = (a, f b)
 sortWith :: Ord b => (a -> b) -> [a] -> [a]
 sortWith f = sortBy (\x y -> compare (f x) (f y))
 
--- Substitution functions
+-- Substitution functions --
 
 -- Substitute a variable for an expression throughout anything that contains
 -- expressions (e.g. AST, CExpression, CStatement)
@@ -76,6 +73,13 @@ subByName n e = transformBi f
         f v@(CVar (Ident s _ _) _) = if n == s then e else v
         f x = x
 
+isMaxCall :: CExpr -> Maybe [CExpr]
+isMaxCall (CCall (CVar (Ident "_max" _ _) _) args _) = Just args
+isMaxCall _ = Nothing
+isCond :: CExpr -> Maybe (CExpr, CExpr, CExpr, CExpr) 
+isCond (CCond (CBinary CGrOp l r _) (Just t) e _) = Just (l,r,t,e)
+isCond _ = Nothing
+
 -- TODO remove this!!
 -- it will cause bugs
 subAllNames :: CExpr -> CExpr -> CExpr
@@ -89,17 +93,12 @@ subAllNames e = transformBi f
    f x | Just _ <- isAtom x = e -- trace ("\nsee: " ++ show x++"\n") $ e
    f x = x
 
-isMaxCall (CCall (CVar (Ident "_max" _ _) _) args _) = Just args
-isMaxCall _ = Nothing
-isCond (CCond (CBinary CGrOp l r _) (Just t) e _) = Just (l,r,t,e)
-isCond _ = Nothing
-
 -- Reduces 'MAX' instances
 reduceCond :: CExpr -> CExpr
 reduceCond expr
   | Just args <- isMaxCall expr
   , Just vals <- mapM isPrim args
-  = maximum (0:vals)
+  = fromIntegral $ maximum (0:vals)
 reduceCond expr
   | Just (l,r,t,e) <- isCond expr
   , Just lval <- isPrim l
@@ -114,9 +113,7 @@ reduceConditionals = transformBi reduceCond
 
 -- List identifiers in term
 getIdentifiers :: CExpr -> [(String, NodeInfo)]
-getIdentifiers expr = [(name, node) | i@(Ident name _ node) <- universeBi expr]
---cgIdents :: CallGraph -> [Ident]
-cgIdents = getIdentifiers . totalStack
+getIdentifiers expr = [(name, node) | (Ident name _ node) <- universeBi expr]
 
 -- Parsing Stuff --
 checkResult :: (Show a) => String -> (Either a b) -> IO b

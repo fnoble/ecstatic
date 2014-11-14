@@ -5,11 +5,10 @@
 
 module Main where
 
-import Development.Ecstatic.Types
+import Development.Ecstatic.CallGraph
 import Development.Ecstatic.Utils
 import Development.Ecstatic.StackUsage
-import Development.Ecstatic.Link
-import Development.Ecstatic.SimplifyDef
+import qualified Development.Ecstatic.Assumptions as A
 
 import Language.C
 import Language.C.Analysis
@@ -19,8 +18,7 @@ import qualified Text.PrettyPrint as PP
 import System.Environment (getArgs)
 import Control.Monad.State
 import Control.Applicative((<$>))
-import qualified Data.Map.Strict as M
-import Data.List (nub)
+import Data.Either (partitionEithers)
 
 declHeader :: VarDecl -> String
 declHeader d =
@@ -32,17 +30,13 @@ declHeader d =
     line = posRow p
     file = posFile p
 
-ppDeclCG :: (VarDecl, CallGraph, CallGraph) -> IO ()
-ppDeclCG (d, cg1, cg2) = do
+ppDeclCG :: (VarDecl, CallGraph) -> IO ()
+ppDeclCG (d, cg1) = do
   setSGR [Reset]
   putStrLn $ declHeader d
   let str1 = ppCallGraph cg1
-  let str2 = ppCallGraph cg2
-
-  setSGR [SetColor Foreground Dull Red]
-  --putStrLn $ str1
   setSGR [SetColor Foreground Dull Blue]
-  putStrLn $ str2
+  putStrLn $ str1
   setSGR [Reset]
 
 -- PP the parsed AST
@@ -51,38 +45,59 @@ reprint = do
   ast <- parseFile "test2.c"
   return $ PP.render . prettyUsingInclude $ ast
 
-analyzeFiles :: [FilePath] -> IO (Maybe [(VarDecl, CallGraph, CallGraph)])
+declString :: VarDecl -> String
+declString = identToString . declIdent
+
+filterCallGraphFn :: VarDecl -> Bool
+filterCallGraphFn =
+  (`elem` (map fst A.stack_limits)) . declString
+
+-- TODO NOW overflow return code
+analyzeFiles :: [FilePath] -> IO (Maybe [(VarDecl, CallGraph)])
 analyzeFiles files = do
   mast <- parseASTFiles files
   case mast of
     Nothing -> putStrLn "analyzeFile: Invalid file." >> return Nothing
     Just (globals, funcs) -> do
-      let idents = M.keys $ gObjs globals
-      let o = M.toList $ reformat globals
-      mapM_ print $ map fst $ o
-      print $ length o
+      -- Calculate graphs, keep only those with stack limits
+      let pairs = filter (filterCallGraphFn . fst)
+                  $ evalStack $ mapM (go globals) funcs
 
+      --mapM_ ppDeclCG pairs
 
-      let pairs'' = evalStack $ mapM (go globals) funcs
-      -- TODO make general filtering code
-      let pairs''' = filter ((== "process_matched_obs") . identToString 
-                                . declIdent . fst) pairs''
-      let pairs = pairs''
-      let pairs' = map (\(a, b) -> (a, b, reduceCG b)) pairs
+      -- Lookup stack limits
+      let limitPairs =
+            [ (limit, (name, cg))
+            | (decl, cg) <- pairs
+            , let name = declString decl
+            , let Just limit = lookup name A.stack_limits]
 
-      mapM_ ppDeclCG pairs'
-      --let idents = nub . concat . map cgIdents . map snd $ pairs
-      --putStrLn $ "idents (" ++ (show $ length idents) ++ "): "
-      --mapM_ (\(a) -> putStrLn a) . nub . map fst $ idents
-      --putStrLn $ "idents (" ++ (show $ length idents) ++ ")"
-      --putStrLn $ "names (" ++ (show $ length $ nub . map fst $ idents) ++ ")"
+      let traces = map (uncurry maxTraces) limitPairs
+          (bad, good) = partitionEithers traces
+
+      mapM_ ppTraceLimit good
+
+      case bad of
+        [] -> return ()
+        _  -> do 
+          putStrLn "analyzeFiles. error: symbolic values in "
+          print bad
+
       putStrLn $ "num functions: " ++ show (length funcs)
-      return $ Just pairs'
+      return $ Just pairs
   where
    go :: GlobalDecls -> FunDef -> State StackMap (VarDecl, CallGraph)
    go g (FunDef d s _) | Just params <- funParams d =
      (d,) <$> defStackUsage g (s, params)
    go _ f = error $ "analyzeFiles. not a FunDef?: " ++ show f
+
+   ppTraceLimit :: Trace -> IO ()
+   ppTraceLimit trace = do
+     setSGR [SetColor Foreground Dull Blue]
+     let limitString = "(limit " ++ show (trLimit trace) ++ ")"
+     putStrLn limitString
+     setSGR [Reset]
+     putStrLn $ ppTrace trace
 
 data FlagVal = NoFlag | Flag -- | FlagVal a
 parseFlag :: [String] -> String -> (FlagVal, [String])
@@ -94,43 +109,31 @@ parseFlag args flag =
     _ : rest -> (Flag, front ++ rest)
 
 -- For ghci
+testMain :: IO (Maybe [(VarDecl, CallGraph)])
 testMain = do
   doMain NoFlag ["test.c"]
 
-printDeclSize (b,a,_,_) = 
-  let label = identToString . declIdent $ a
-  in putStrLn $ label ++ ": " ++ show b
-
-g0 (a,_,_,_) = a
-g1 (_,a,_,_) = a
-g2 (_,_,a,_) = a
-g3 (_,_,_,a) = a
-
+printParse :: FilePath -> IO ()
 printParse file = do
   mast <- parseASTFiles [file]
   case mast of
     Nothing -> putStrLn "analyzeFile: Invalid file."
-    Just (globals, funcs) -> do
+    Just (_, funcs) -> do
       mapM_ print funcs
-  
-doMain :: FlagVal -> [FilePath] -> IO (Maybe [(Maybe Int, VarDecl, CallGraph, CallGraph)])
+
+doMain :: FlagVal -> [FilePath] -> IO (Maybe [(VarDecl, CallGraph)])
 doMain flag files = do
   case flag of
-    NoFlag -> return ()
     Flag -> do
       pps <- mapM preprocessFile files
       writeFile "pp-output.c" (concat pps)
-  mtriples <- analyzeFiles files
-  case mtriples of
-    Nothing -> return Nothing
-    Just triples -> do
-      let ts0 = map (\(a,b,c) -> (isPrim (totalStack c), a,b,c)) triples
-          ts1 = reverse $ sortWith g0 ts0
-      mapM_ printDeclSize $ take 60 ts1
-      return $ Just ts1
+      return Nothing
+    NoFlag ->
+      analyzeFiles files
 
 -- FLAGS:
 --  -E: outputs total preprocessor output to file
+main :: IO (Maybe [(VarDecl, CallGraph)])
 main = do
   args <- getArgs
   let (flag, files) = parseFlag args "-E"

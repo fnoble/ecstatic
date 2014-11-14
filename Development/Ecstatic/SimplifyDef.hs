@@ -5,12 +5,10 @@ module Development.Ecstatic.SimplifyDef (
   simplify,
   isSum, isMul, isAtom, isPrim
 ) where
-import Development.Ecstatic.Types
+import Development.Ecstatic.Types()
 import qualified Simplify as S
 import Language.C
-import Language.C.Analysis
 import qualified Data.Map.Strict as M
-import Debug.Trace (trace)
 
 -- Exported function
 simplify :: CExpr -> CExpr
@@ -22,7 +20,7 @@ simplify' = rebuild . (S.simplify expr_def)
 rebuild :: S.Poly CExpr Int -> CExpr
 rebuild poly =
   case map toProd (M.toList poly) of
-    [] -> fromIntegral 0
+    [] -> 0
     ps -> foldl1 (+) ps
  where
   toProd :: ([(CExpr, Int)], Int) -> CExpr
@@ -45,18 +43,27 @@ expr_def = S.Expr
   , S.zero = 0
   , S.one = 1
   }
+
+isSum :: CExpr -> Maybe [CExpr]
 isSum (CBinary CAddOp t1 t2 _) = Just [t1, t2]
 isSum (CBinary CSubOp t1 t2 _) =
   Just [t1, CUnary CMinOp t2 undefNode]
 isSum _ = Nothing
+
+isMul :: CExpr -> Maybe [CExpr]
 isMul (CBinary CMulOp t1 t2 _) = Just [t1, t2]
 isMul _ = Nothing
-isAtom (CBinary CMulOp t1 t2 _) = Nothing
-isAtom (CBinary CAddOp t1 t2 _) = Nothing
-isAtom (CConst (CIntConst (CInteger number _ _) _)) = Nothing
+
+isAtom :: CExpr -> Maybe CExpr
+isAtom (CBinary CMulOp _ _ _) = Nothing
+isAtom (CBinary CAddOp _ _ _) = Nothing
+isAtom (CConst (CIntConst (CInteger _ _ _) _)) = Nothing
 isAtom t = Just t
+
+isPrim' :: CExpr -> Maybe Int
 isPrim' (CConst (CIntConst (CInteger number _ _) _)) = Just (fromIntegral number)
 isPrim' _ = Nothing
+isPrim :: CExpr -> Maybe Int
 isPrim x | Just n <- isPrim' x = Just n
 isPrim (CUnary CMinOp x _) | Just n <- isPrim' x = Just (-n)
 isPrim _ = Nothing

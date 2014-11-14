@@ -1,14 +1,13 @@
--- TODO now
--- - parse/input stack limit
--- - if function exceeds, print bad stack traces
---
---
 -- TODO
+-- jenkins
+-- check for missing assumptions
+--
+-- substitute local vars
+--
 -- figure out if track.c ambiguity matters
 -- generate warnings
 --   - for external functions, _max, local vars, function pointers
 -- substitute function pointers
--- substitute local vars
 --
 -- make a linker?
 --
@@ -19,68 +18,23 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 module Development.Ecstatic.StackUsage where
-import Development.Ecstatic.Types
-import Development.Ecstatic.Utils
+import Development.Ecstatic.CallGraph
 import Development.Ecstatic.Size
-import qualified Development.Ecstatic.SimplifyDef as S
-import Development.Ecstatic.SimplifyDef
+import Development.Ecstatic.SimplifyDef as S
 
 import Language.C
 import Language.C.Analysis
 import Language.C.Data.Ident
 
 import Data.Generics.Uniplate.Data
-import Data.Typeable
-import Data.Data
 import qualified Data.Map as M
-import Data.Maybe
-import Data.List (nub)
-import System.Console.ANSI
 import Control.Monad.State
-import Debug.Trace (trace)
 
 type StackMap = M.Map String CallGraph
 
 evalStack :: State StackMap a -> a
 evalStack m = evalState m M.empty
 
-type Assumption = (String, Integer)
-
-num_dds :: Integer
-num_dds = 10
-assumptions :: [Assumption]
-assumptions = [("num_dds", num_dds),
-               ("res_dim", 2*num_dds - 3),
-               ("dd_dim", 2*num_dds),
-               ("num_sats", num_dds+1),
-               ("state_dim", num_dds),
-               ("new_state_dim", num_dds),
-               ("new_state_dim", num_dds),
-               ("lwork", 22)]
-
-cgMap f (CG l t cs) = CG (f l) (f t) (map (mapSnd (cgMap f)) cs)
-
---cgSimplify = transformBi S.simplify
-cgSimplify = cgMap S.simplify
-conjSimpl f = S.simplify . f . S.simplify
-
-fullSimplExpr :: CExpr -> CExpr
-fullSimplExpr = conjSimpl reduceConditionals . conjSimpl (transformBi (subAllNames 0))
-
-reduceCG :: CallGraph -> CallGraph
-reduceCG cg =
-  cgMap fullSimplExpr $
-    foldr sub cg assumptions
-  where
-    sub (s, x) = subByName s ((fromInteger x)::CExpr)
-
-applyAssumptions :: CExpr -> CExpr
-applyAssumptions e = foldr sub e assumptions
-  where sub :: (String, Integer) -> CExpr -> CExpr
-        sub (s, x) expr = subByName s ((fromInteger x)::CExpr) expr
-
-makeMax :: CExpr -> CExpr -> CExpr
-makeMax e1 e2 = CCond (CBinary CGrOp e1 e2 undefNode) (Just e1) e2 undefNode
 makeMaximum :: [CExpr] -> CExpr
 makeMaximum es = CCall (CVar (Ident "_max" (-1) undefNode) undefNode) es undefNode
 
@@ -89,9 +43,7 @@ defStackUsage g (s, params) = do
   fs <- sequence func_calls
   let total_stack =
         local_size +
-        --(sum $
         (makeMaximum $ 
-        --(foldr makeMax 0 $
           (map (totalStack . snd) fs))
   return $ reduceCG $ CG local_size total_stack fs
   where
@@ -116,7 +68,6 @@ callStackUsage g expr@(CVar ident _) args = do
   addStackVal :: String -> CallGraph -> State StackMap ()
   addStackVal name cg = modify (M.insert name cg)
   doCG = do
-    stackm <- get
     mval <- gets (M.lookup name)
     case mval of
       -- Value already available
@@ -124,7 +75,7 @@ callStackUsage g expr@(CVar ident _) args = do
       Nothing ->
         case M.lookup ident (gObjs g) of
           -- Have global decl
-          Just fd@(FunctionDef (FunDef vd def _))
+          Just (FunctionDef (FunDef vd def _))
                | Just params <- funParams vd -> do
             cg <- defStackUsage g (def, params)
             -- Record general value in StackMap
@@ -133,7 +84,7 @@ callStackUsage g expr@(CVar ident _) args = do
             let ids = [id | (ParamDecl (VarDecl (VarName id _) _ _) _) <- params]
             return (subsInCallGraph (zip ids args) cg)
           -- Only have a declaration
-          Just (Declaration (Decl (VarDecl (VarName ident' _) _ _) _)) -> 
+          Just (Declaration (Decl (VarDecl (VarName _ _) _ _) _)) -> 
             returnVar -- TODO link somehow?
           -- Shouldn't happen:
           Just x -> error $ "callStackUsage. : " ++ show x
@@ -146,30 +97,4 @@ callStackUsage g expr@(CVar ident _) args = do
 -- TODO resolve function pointers
 callStackUsage _ expr _ = return ("FN_PTR", CG expr expr [])
 callStackUsage _ expr args = error $ "callStackUsage. :" ++ show expr ++ show args
-
-subInCallGraph :: Ident -> CExpr -> CallGraph -> CallGraph
-subInCallGraph ident e (CG e1 t1 cs) =
-  CG (substitute ident e e1) 
-     (substitute ident e t1) 
-     $ map (mapSnd (subInCallGraph ident e)) cs
-subsInCallGraph :: [(Ident, CExpr)] -> CallGraph -> CallGraph
-subsInCallGraph subs cg = foldr (uncurry subInCallGraph) cg subs
-
--- Prints CallGraph, using ANSI color codes
-ppCallGraph :: CallGraph -> String
-ppCallGraph = ppCallGraph' ""
-ppCallGraph' :: String -> CallGraph -> String
-ppCallGraph' prefix (CG ls ts calls) =
-  init . unlines $ [prefix ++ "Local: " ++ (ppStack ls),
-                    prefix ++ "Total: " ++ (ppStack ts)]
-          -- ++ map ppBinding calls
- where
-  ppStack = show . pretty
-  --ppStack s | Just n <- isPrim s = show n
-  --ppStack _ = "[symbol]"
-  ppName name =
-    setSGRCode [SetColor Foreground Dull Blue] ++
-    name ++ setSGRCode [Reset]
-  ppBinding (name, call) =
-    prefix ++ (ppName name) ++ ":\n" ++ ppCallGraph' ((replicate 4 ' ') ++ prefix) call
 

@@ -6,18 +6,11 @@
 --
 -- eventually: replace show with pretty
 module Development.Ecstatic.Size where
-import Development.Ecstatic.Utils
-import qualified Development.Ecstatic.SimplifyDef as S
+import Development.Ecstatic.Utils()
 
 import Language.C
-import Language.C.Data.Ident
 import Language.C.Analysis
-import Data.Generics.Uniplate.Data
 import qualified Data.Map.Strict as M
-import System.Console.ANSI
-import qualified Text.PrettyPrint as PP
-import Control.Monad.State
-import Control.Applicative((<$>))
 import Debug.Trace (trace)
 
 sizeOfDecl :: GlobalDecls -> CDecl -> CExpr
@@ -31,7 +24,7 @@ sizeOfDecl g (CDecl ds ((d,initializer,expr):vs) n1) =
         f [ts] = sizeOf g ts
         -- "Implicit int rule", should never occur in C99
         f []   = sizeOf g (CIntType undefined)
-        f [t1, t2] = sizeOf g t2 -- TODO does this handle "unsigned [foo]"?
+        f [_, t2] = sizeOf g t2 -- TODO does this handle "unsigned [foo]"?
         f ts = error $ "Declaration with too many type specifiers?: " ++ show ts
 
         modifier (CDeclr _ [] _ _ _) = (fromInteger 1)
@@ -95,12 +88,12 @@ sizeOfType g t@(TypeDefType (TypeDefRef _ mtype _) _ _) =
 sizeOfType g (DirectType ty _ _) =
   sizeOfTypeName g ty
 -- TODO FunctionType
-sizeOfType g (PtrType _ _ _) = ptrSize
+sizeOfType _ (PtrType _ _ _) = ptrSize
  where
    ptrSize = 4
-sizeOfType g (ArrayType ty (ArraySize _ expr) _ attrs) = sizeOfType g ty * expr
+sizeOfType g (ArrayType ty (ArraySize _ expr) _ _) = sizeOfType g ty * expr
 -- Assume unknown length array is "flexible member array" of struct
-sizeOfType g (ArrayType ty (UnknownArraySize _) _ attrs) = sizeOfType g ty
+sizeOfType g (ArrayType ty (UnknownArraySize _) _ _) = sizeOfType g ty
 sizeOfType _ ty = error $ "sizeOfType. unsupported type: " ++ show ty
 
 -- TODO replace the big sizeof enumeration with a call to this?
