@@ -84,7 +84,7 @@ analyzeFiles base files = do
                    _  -> 
                      "analyzeFiles. error: symbolic values in\n"
                      ++ show bad
-        overflows = if any isOverflow good then "OVERFLOW DETECTED" else ""
+        overflows = if any isOverflow good then "POSSIBLE OVERFLOW DETECTED" else ""
         outputString = unlines $ overflows : errors : nsString : lines
 
       return $ Just (outputString, pairs)
