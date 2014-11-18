@@ -126,7 +126,7 @@ doMain :: FilePath -> FilePath -> [FilePath] -> IO (Maybe (String, [(VarDecl, Ca
 doMain base output files = do
   mpair <- analyzeFiles base files
   case mpair of
-    Just (str, _) -> writeFile output str
+    Just (str, _) -> writeFile output ("<pre>\n" ++ str ++ "</pre>")
     Nothing -> return ()
   return mpair
 
