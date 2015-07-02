@@ -21,5 +21,14 @@ typedef int bool;
 
 #define PRId32 ""
 
+extern UINT32_MAX;
+extern UINT32_MIN;
+extern INT32_MAX;
+extern INT32_MIN;
+extern UINT8_MAX;
+extern UINT8_MIN;
+extern INT8_MAX;
+extern INT8_MIN;
+
 #endif
 

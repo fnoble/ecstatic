@@ -12,20 +12,37 @@ import Language.C
 import Language.C.Analysis
 import qualified Data.Map.Strict as M
 import Debug.Trace (trace)
+import Data.List (find)
+import Data.Maybe (isJust)
+
+ptrSize = 4
 
 sizeOfDecl :: GlobalDecls -> CDecl -> CExpr
 -- Empty list corresponds to type used outside a declaration?
 -- e.g. sizeof(double)
 sizeOfDecl _ (CDecl _ [] _) = 0
 sizeOfDecl g (CDecl ds ((d,initializer,expr):vs) n1) =
-  f [ts | CTypeSpec ts <- ds] * maybe (fromInteger 1) modifier d
-    + sizeOfDecl g (CDecl ds vs n1)
+  let multiplier = maybe (fromInteger 1) modifier d
+      rest = sizeOfDecl g (CDecl ds vs n1)
+      current = if hasptrdeclr d
+                -- It's a pointer
+                then ptrSize
+                else f [ts | CTypeSpec ts <- ds]
+
+  in current * multiplier + rest
+
   where f :: [CTypeSpec] -> CExpr
         f [ts] = sizeOf g ts
         -- "Implicit int rule", should never occur in C99
         f []   = sizeOf g (CIntType undefined)
         f [_, t2] = sizeOf g t2 -- TODO does this handle "unsigned [foo]"?
         f ts = error $ "Declaration with too many type specifiers?: " ++ show ts
+
+        hasptrdeclr d = isJust $ do
+          CDeclr _ ds _ _ _ <- d
+          find isptrdeclr ds
+        isptrdeclr (CPtrDeclr _ _) = True
+        isptrdeclr _ = False
 
         modifier (CDeclr _ [] _ _ _) = (fromInteger 1)
         modifier (CDeclr ident (dd:dds) sl a n2) =
@@ -77,8 +94,7 @@ sizeOf g ty@(CSUType (CStruct CUnionTag _ decl _ _) _) =
 sizeOf g (CTypeDef ident _) = 
   case M.lookup ident (gTypeDefs g) of
     Nothing -> error $ "unknown typedef ident: " ++ show ident
-    Just (TypeDef _ ty _ _) ->
-      sizeOfType g ty
+    Just (TypeDef _ ty _ _) -> sizeOfType g ty
 
 sizeOfType :: GlobalDecls -> Type -> CExpr
 sizeOfType g t@(TypeDefType (TypeDefRef _ mtype _) _ _) =
@@ -88,9 +104,7 @@ sizeOfType g t@(TypeDefType (TypeDefRef _ mtype _) _ _) =
 sizeOfType g (DirectType ty _ _) =
   sizeOfTypeName g ty
 -- TODO FunctionType
-sizeOfType _ (PtrType _ _ _) = ptrSize
- where
-   ptrSize = 4
+sizeOfType _ (PtrType t _ _) = ptrSize
 sizeOfType g (ArrayType ty (ArraySize _ expr) _ _) = sizeOfType g ty * expr
 -- Assume unknown length array is "flexible member array" of struct
 sizeOfType g (ArrayType ty (UnknownArraySize _) _ _) = sizeOfType g ty

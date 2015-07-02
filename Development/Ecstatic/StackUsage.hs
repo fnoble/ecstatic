@@ -30,6 +30,8 @@ import Data.Generics.Uniplate.Data
 import qualified Data.Map as M
 import Control.Monad.State
 
+import Debug.Trace (trace)
+
 type StackMap = M.Map String CallGraph
 
 evalStack :: State StackMap a -> a
@@ -53,7 +55,10 @@ defStackUsage g (s, params) = do
     -- Total of function calls (monadic)
     func_calls = [callStackUsage g func args | CCall func args _ :: CExpr <- universeBi s]
     -- Total argument stack usage
-    arg_size = S.simplify $ sum [sizeOfType g ty | ParamDecl (VarDecl _ _ ty) _ <- params]
+    arg_size = S.simplify $ sum [sizeOfTypeAsArg g ty | ParamDecl (VarDecl _ _ ty) _ <- params]
+
+sizeOfTypeAsArg _ (ArrayType ty _ _ _) = 4
+sizeOfTypeAsArg g t = sizeOfType g t
 
 funParams :: VarDecl -> Maybe [ParamDecl]
 funParams (VarDecl _ _ (FunctionType (FunType _ params _) _)) = Just params

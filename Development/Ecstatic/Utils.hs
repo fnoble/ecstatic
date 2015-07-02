@@ -28,11 +28,15 @@ includeFlags base = [
   "-I" ++ base ++ "/ChibiOS-RT/os/ports/GCC/ARMCMx/STM32F4xx/",
   "-I" ++ base ++ "/ChibiOS-RT/os/ports/common/ARMCMx/",
 
+  "-I" ++ base ++ "/libsbp/c/include/",
+  "-I" ++ base ++ "/libsbp/c/src",
+
   "-I" ++ base ++ "/libswiftnav/src",
   "-I" ++ base ++ "/libswiftnav/clapack-3.2.1-CMAKE/INCLUDE",
   "-I" ++ base ++ "/libswiftnav/CBLAS/include",
+
   "-I" ++ base ++ "/src",
-  
+
   "-mno-sse3"
   ]
 

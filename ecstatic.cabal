@@ -23,6 +23,7 @@ executable ecstatic
                        ansi-terminal,
                        uniplate,
                        pretty,
+                       pretty-show,
                        -- Local package
                        simplify
   default-language:    Haskell2010

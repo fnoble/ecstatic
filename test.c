@@ -4,7 +4,6 @@
 #include "acq.c"
 #include "cw.c"
 #include "error.c"
-#include "flash_callbacks.c"
 #include "init.c"
 //#include "main.c" // GIT_VERSION
 #include "manage.c"
@@ -13,7 +12,6 @@
 //#include "rtcm.c" // see below
 #include "sbp.c"
 #include "sbp_fileio.c"
-#include "sbp_piksi.c"
 #include "settings.c"
 #include "simulator.c"
 #include "simulator_data.c"
@@ -21,10 +19,12 @@
 #include "system_monitor.c"
 #include "timing.c"
 #include "track.c"
+#include "base_obs.c"
 
 /* libswiftnav */
 #include "almanac.c"
 #include "amb_kf.c"
+#include "baseline.c"
 #include "ambiguity_test.c"
 #include "bits.c"
 #include "coord_system.c"
@@ -43,8 +43,6 @@
 #include "sats_management.c"
 #include "sbp.c"
 #include "sbp_utils.c"
-#include "single_diff.c"
-#include "stupid_filter.c"
 //#include "track.c" // collides with other
 #include "tropo.c"
 
