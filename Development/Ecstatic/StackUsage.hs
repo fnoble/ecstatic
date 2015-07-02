@@ -1,140 +1,105 @@
+-- TODO
+-- jenkins
+-- check for missing assumptions
+--
+-- substitute local vars
+--
+-- figure out if track.c ambiguity matters
+-- generate warnings
+--   - for external functions, _max, local vars, function pointers
+-- substitute function pointers
+--
+-- make a linker?
+--
+-- external functions: printf, ch*, blas
+-- UI:
+--  config file?
+--  REPL interface / DOT?
 {-# LANGUAGE ScopedTypeVariables #-}
-
+{-# LANGUAGE DeriveDataTypeable #-}
 module Development.Ecstatic.StackUsage where
-
-import Development.Ecstatic.Utils
+import Development.Ecstatic.CallGraph
+import Development.Ecstatic.Size
+import Development.Ecstatic.SimplifyDef as S
 
 import Language.C
-import Language.C.Pretty
-import Language.C.Data.Ident
 import Language.C.Analysis
+import Language.C.Data.Ident
+
 import Data.Generics.Uniplate.Data
-import Data.Typeable
-import Data.Data
 import qualified Data.Map as M
-import System.Console.ANSI
-import Control.Monad
-import Text.Printf
-import Debug.Trace
+import Control.Monad.State
 
-num_dds :: Integer
-num_dds = 13
+import Debug.Trace (trace)
 
-assumptions :: [(String, Integer)]
-assumptions = [("num_dds", num_dds),
-               ("res_dim", 2*num_dds - 3),
-               ("dd_dim", 2*num_dds),
-               ("num_sats", num_dds+1),
-               ("state_dim", num_dds),
-               ("new_state_dim", num_dds),
-               ("new_state_dim", num_dds),
-               ("lwork", 22)]
+type StackMap = M.Map String CallGraph
 
-applyAssumptions :: CExpr -> CExpr
-applyAssumptions e = foldr sub e assumptions
-  where sub :: (String, Integer) -> CExpr -> CExpr
-        sub (s, x) expr = subByName s ((fromInteger x)::CExpr) expr
+evalStack :: State StackMap a -> a
+evalStack m = evalState m M.empty
 
-doStackUsage :: GlobalDecls -> CStat -> IO ()
-doStackUsage g s = do
-  setSGR [SetColor Foreground Dull Blue]
-  putStrLn "Stack Usage:"
-  print $ pretty $ stackUsage g s
-  setSGR [Reset]
+makeMaximum :: [CExpr] -> CExpr
+makeMaximum es = CCall (CVar (Ident "_max" (-1) undefNode) undefNode) es undefNode
 
-stackUsage :: GlobalDecls -> CStat -> CExpr
-stackUsage g s =
-  -- Simple stack usage model:
-  -- usage = size of automatic vars + stack usage of function calls
-  simplify $ applyAssumptions $ vars_size + func_call_size
-
+defStackUsage :: GlobalDecls -> (CStat, [ParamDecl]) -> State StackMap CallGraph
+defStackUsage g (s, params) = do
+  fs <- sequence func_calls
+  let total_stack =
+        local_size +
+        (makeMaximum $ 
+          (map (totalStack . snd) fs))
+  return $ reduceCG $ CG local_size total_stack fs
   where
+    local_size = S.simplify $ vars_size + arg_size
     -- Total size of all the local variables
-    vars_size = sum [sizeOfDecl d | d@(CDecl _ _ _) :: CDecl <- universeBi s]
+    vars_size = S.simplify $ sum [sizeOfDecl g d | d :: CDecl <- universeBi s]
+    -- Total of function calls (monadic)
+    func_calls = [callStackUsage g func args | CCall func args _ :: CExpr <- universeBi s]
+    -- Total argument stack usage
+    arg_size = S.simplify $ sum [sizeOfTypeAsArg g ty | ParamDecl (VarDecl _ _ ty) _ <- params]
 
-    -- Total of function calls
-    func_call_size = sum [f func args | c@(CCall func args _) :: CExpr <- universeBi s]
+sizeOfTypeAsArg _ (ArrayType ty _ _ _) = 4
+sizeOfTypeAsArg g t = sizeOfType g t
 
-    f :: CExpr -> [CExpr] -> CExpr
-    f c@(CVar id _) args =
-      case funcStackUsage g id args of
-        Nothing -> error $ "Call to unknown function: " ++ (show $ pretty id)
-        Just e -> e
-    f _ _ = error "Call to non-constant function?"
+funParams :: VarDecl -> Maybe [ParamDecl]
+funParams (VarDecl _ _ (FunctionType (FunType _ params _) _)) = Just params
+funParams _ = Nothing
 
-funcStackUsage :: GlobalDecls -> Ident -> [CExpr] -> Maybe CExpr
-funcStackUsage g i args = M.lookup i (gObjs g) >>= f
-  where f :: IdentDecl -> Maybe CExpr
-        f (FunctionDef (FunDef
-            (VarDecl _ _ (FunctionType (FunType _ params _) _))
-           s _)) =
-          Just $ foldr sub (stackUsage g s) subs
-            where
-              ids = [id | (ParamDecl (VarDecl (VarName id _) _ _) _) <- params]
-              subs = zip ids args
-              sub (id, arg) stmt = substitute id arg stmt
-        -- Not a function definition!?
-        f _ = Nothing
-
-sizeOfDecl :: CDecl -> CExpr
--- Empty list corresponds to type used outside a declaration?
--- e.g. sizeof(double)
-sizeOfDecl (CDecl _ [] _) = 0
-sizeOfDecl (CDecl ds ((d,i,e):vs) n1) =
-  f [ts | CTypeSpec ts <- ds] * maybe (fromInteger 1) modifier d
-    + sizeOfDecl (CDecl ds vs n1)
-  where f :: [CTypeSpec] -> CExpr
-        f [ts] = fromInteger $ sizeOf ts
-        -- "Implicit int rule", should never occur in C99
-        f []   = fromInteger $ sizeOf (CIntType undefined)
-        f _    = error "Declaration with more than one type specifier?"
-
-        modifier (CDeclr _ [] _ _ _) = (fromInteger 1)
-        modifier (CDeclr id (dd:dds) sl a n2) =
-          modifier' dd * modifier (CDeclr id dds sl a n2)
-
-        modifier' (CArrDeclr _ (CNoArrSize _) _) = error "Unknown array size"
-        modifier' (CArrDeclr _ (CArrSize _ sz) _) = sz
-        modifier' _ = fromInteger 1
-
--- TODO: Check these for our platform!!
-sizeOf :: CTypeSpecifier a -> Integer
-sizeOf (CVoidType _) = 0
-sizeOf (CCharType _) = 1
-sizeOf (CShortType _) = 2
-sizeOf (CIntType _) = 4
-sizeOf (CLongType _) = 8
-sizeOf (CFloatType _) = 4
-sizeOf (CDoubleType _) = 8
-sizeOf (CSignedType _) = 4
-sizeOf (CUnsigType _) = 4
-sizeOf (CBoolType _) = 1
-sizeOf (CComplexType _) = 16
-sizeOf (CEnumType _ _) = 4
-sizeOf (CTypeOfExpr _ _) = error "Unsupported type: typeof()"
-sizeOf (CTypeOfType _ _) = error "Unsupported type: typeof()"
-{-
-sizeOf (CSUType (CStruct CStructTag _ decl _ _) _) =
-  case decl of
-    Nothing -> 0
-    Just ds -> sum $ map sizeOfDecl ds
-sizeOf (CSUType (CStruct CUnionTag _ decl _ _) _) =
-  case decl of
-    Nothing -> 0
-    Just ds -> maximum $ map sizeOfDecl ds
--}
-
--- TODO: Should really find all the typedefs and calculate the size based on
--- the mapped type, for now just match known common typedefs.
--- HINT - we can pull the typedefs out of GlobalDecls
-sizeOf (CTypeDef (Ident "u64" _ _) _) = 8
-sizeOf (CTypeDef (Ident "s64" _ _) _) = 8
-sizeOf (CTypeDef (Ident "u32" _ _) _) = 4
-sizeOf (CTypeDef (Ident "s32" _ _) _) = 4
-sizeOf (CTypeDef (Ident "u16" _ _) _) = 2
-sizeOf (CTypeDef (Ident "s16" _ _) _) = 2
-sizeOf (CTypeDef (Ident "u8" _ _) _) = 1
-sizeOf (CTypeDef (Ident "s8" _ _) _) = 1
-sizeOf (CTypeDef (Ident "integer" _ _) _) = 4
-sizeOf (CTypeDef (Ident s _ _) _) = error $ "Unknown typedef: " ++ s
+callStackUsage :: GlobalDecls -> CExpr -> [CExpr] -> State StackMap (String, CallGraph)
+callStackUsage g expr@(CVar ident _) args = do
+  cg <- doCG
+  return (name, cg)
+ where
+  name = identToString ident
+  addStackVal :: String -> CallGraph -> State StackMap ()
+  addStackVal name cg = modify (M.insert name cg)
+  doCG = do
+    mval <- gets (M.lookup name)
+    case mval of
+      -- Value already available
+      Just cg -> return cg
+      Nothing ->
+        case M.lookup ident (gObjs g) of
+          -- Have global decl
+          Just (FunctionDef (FunDef vd def _))
+               | Just params <- funParams vd -> do
+            cg <- defStackUsage g (def, params)
+            -- Record general value in StackMap
+            addStackVal name cg
+            -- Substitute arguments
+            let ids = [id | (ParamDecl (VarDecl (VarName id _) _ _) _) <- params]
+            return (subsInCallGraph (zip ids args) cg)
+          -- Only have a declaration
+          Just (Declaration (Decl (VarDecl (VarName _ _) _ _) _)) -> 
+            returnVar -- TODO link somehow?
+          -- Shouldn't happen:
+          Just x -> error $ "callStackUsage. : " ++ show x
+          -- Unknown function, return abstract size
+          Nothing -> returnVar
+  returnVar = do
+    let cg = CG expr expr []
+    addStackVal name cg
+    return cg
+-- TODO resolve function pointers
+callStackUsage _ expr _ = return ("FN_PTR", CG expr expr [])
+callStackUsage _ expr args = error $ "callStackUsage. :" ++ show expr ++ show args
 
